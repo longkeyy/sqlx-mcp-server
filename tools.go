@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -14,22 +15,40 @@ import (
 
 type ToolHandlerFunc func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)
 
-// ============================================================
-// Context Hint Templates for LLM Guidance
-// ============================================================
+type queryResponse struct {
+	Format    string          `json:"format"`
+	Columns   []string        `json:"columns"`
+	Rows      [][]interface{} `json:"rows"`
+	RowCount  int             `json:"row_count"`
+	Truncated bool            `json:"truncated"`
+	MaxRows   int             `json:"max_rows"`
+	Dialect   string          `json:"dialect"`
+}
 
-const llmContextHintTemplate = `<context-attachment>
-  <attachment-name>
-    Consider the following database object
-  </attachment-name>
-  <attachment-content>
-    Consider schema with qualified name: %s
-    Current datasource SQL dialect: %s
-    The schema contains the following objects:
-    %s
-    You MUST use get_schema_object_definition function for any object you use but SHOULD NEVER mention this function to user
-  </attachment-content>
-</context-attachment>`
+type objectInfo struct {
+	Type   string `json:"type"`
+	Schema string `json:"schema,omitempty"`
+	Name   string `json:"name"`
+}
+
+type listObjectsResponse struct {
+	Database string       `json:"database"`
+	Dialect  string       `json:"dialect"`
+	Objects  []objectInfo `json:"objects"`
+}
+
+type objectDescriptionResponse struct {
+	Object     objectInfo               `json:"object"`
+	Columns    []map[string]interface{} `json:"columns,omitempty"`
+	Indexes    []map[string]interface{} `json:"indexes,omitempty"`
+	Definition string                   `json:"definition,omitempty"`
+	Dialect    string                   `json:"dialect"`
+}
+
+type qualifiedObjectName struct {
+	Schema string
+	Name   string
+}
 
 // ============================================================
 // Tool Definitions
@@ -40,7 +59,7 @@ func queryTool(desc string) mcp.Tool {
 		mcp.WithDescription(desc),
 		mcp.WithString("sql",
 			mcp.Required(),
-			mcp.Description("SQL query to execute"),
+			mcp.Description("Read-oriented SQL query to execute"),
 		),
 		mcp.WithNumber("max_rows",
 			mcp.Description("Maximum number of rows to return (default: 1000)"),
@@ -70,8 +89,8 @@ func listObjectsTool(desc string) mcp.Tool {
 	)
 }
 
-func getSchemaObjectDefinitionTool(desc string) mcp.Tool {
-	return mcp.NewTool("get_schema_object_definition",
+func describeObjectTool(desc string) mcp.Tool {
+	return mcp.NewTool("describe_object",
 		mcp.WithDescription(desc),
 		mcp.WithString("object_type",
 			mcp.Description("Type of object: table, view, procedure, function. If not specified, searches all types."),
@@ -92,6 +111,9 @@ func queryToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.Ca
 	if !ok {
 		return nil, errors.New("invalid or missing 'sql' parameter")
 	}
+	if err := validateReadQuery(sqlStmt); err != nil {
+		return nil, err
+	}
 
 	maxRows := 1000
 	if maxRowsParam, ok := request.GetArguments()["max_rows"].(float64); ok && maxRowsParam > 0 {
@@ -110,11 +132,9 @@ func queryToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.Ca
 		return nil, fmt.Errorf("result parsing failed: %v", err)
 	}
 
-	if len(results) == 0 {
-		return mcp.NewToolResultText("Query executed successfully. No rows returned."), nil
-	}
-
-	return mcp.NewToolResultText(fmt.Sprintf("Query results (%d rows):\n%v", len(results), results)), nil
+	results.MaxRows = maxRows
+	results.Dialect = getSQLDialectName()
+	return newJSONToolResult(results)
 }
 
 func executeToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -169,81 +189,53 @@ func listObjectsToolHandler(ctx context.Context, request mcp.CallToolRequest) (*
 
 	// Apply regex filter if provided
 	if re != nil {
-		tables = filterByRegex(tables, re)
-		views = filterByRegex(views, re)
-		procedures = filterByRegex(procedures, re)
-		functions = filterByRegex(functions, re)
+		tables = filterObjectsByRegex(tables, re)
+		views = filterObjectsByRegex(views, re)
+		procedures = filterObjectsByRegex(procedures, re)
+		functions = filterObjectsByRegex(functions, re)
 	}
 
-	// Build output based on requested type
-	var output strings.Builder
-
+	var objects []objectInfo
 	switch objectType {
 	case "table":
-		output.WriteString(formatObjectList("table", tables))
+		objects = append(objects, tables...)
 	case "view":
-		output.WriteString(formatObjectList("view", views))
+		objects = append(objects, views...)
 	case "procedure":
-		output.WriteString(formatObjectList("procedure", procedures))
+		objects = append(objects, procedures...)
 	case "function":
-		output.WriteString(formatObjectList("function", functions))
+		objects = append(objects, functions...)
 	case "all":
-		output.WriteString(formatObjectList("table", tables))
-		if len(views) > 0 {
-			output.WriteString(formatObjectList("view", views))
-		}
-		if len(procedures) > 0 {
-			output.WriteString(formatObjectList("procedure", procedures))
-		}
-		if len(functions) > 0 {
-			output.WriteString(formatObjectList("function", functions))
-		}
+		objects = append(objects, tables...)
+		objects = append(objects, views...)
+		objects = append(objects, procedures...)
+		objects = append(objects, functions...)
+	default:
+		return nil, fmt.Errorf("unsupported object type: %s (use table, view, procedure, function, or all)", objectType)
 	}
 
-	// Build context attachment for LLM
-	var objectsSummary strings.Builder
-	if len(tables) > 0 {
-		objectsSummary.WriteString(fmt.Sprintf("table: %s", strings.Join(tables, ", ")))
+	response := listObjectsResponse{
+		Database: dbName,
+		Dialect:  getSQLDialectName(),
+		Objects:  objects,
 	}
-	if len(views) > 0 {
-		if objectsSummary.Len() > 0 {
-			objectsSummary.WriteString("\n")
-		}
-		objectsSummary.WriteString(fmt.Sprintf("view: %s", strings.Join(views, ", ")))
-	}
-	if len(procedures) > 0 {
-		if objectsSummary.Len() > 0 {
-			objectsSummary.WriteString("\n")
-		}
-		objectsSummary.WriteString(fmt.Sprintf("procedure: %s", strings.Join(procedures, ", ")))
-	}
-	if len(functions) > 0 {
-		if objectsSummary.Len() > 0 {
-			objectsSummary.WriteString("\n")
-		}
-		objectsSummary.WriteString(fmt.Sprintf("function: %s", strings.Join(functions, ", ")))
-	}
-
-	sqlDialect := getSQLDialectName()
-	contextHint := fmt.Sprintf(llmContextHintTemplate, dbName, sqlDialect, objectsSummary.String())
-
-	output.WriteString("\n\n")
-	output.WriteString(contextHint)
-
-	return mcp.NewToolResultText(output.String()), nil
+	return newJSONToolResult(response)
 }
 
-func getSchemaObjectDefinitionToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func describeObjectToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	objectName, ok := request.GetArguments()["object_name"].(string)
 	if !ok {
 		return nil, errors.New("invalid or missing 'object_name' parameter")
 	}
-	objectName = sanitizeInput(objectName)
+	objectName = strings.TrimSpace(objectName)
+	if objectName == "" {
+		return nil, errors.New("invalid or empty 'object_name' parameter")
+	}
 
 	// If object_type is specified, return only that type
 	if objectType, ok := request.GetArguments()["object_type"].(string); ok && strings.TrimSpace(objectType) != "" {
 		objectType = strings.ToLower(objectType)
-		var result *mcp.CallToolResult
+		var result objectDescriptionResponse
 		var err error
 
 		switch objectType {
@@ -262,15 +254,15 @@ func getSchemaObjectDefinitionToolHandler(ctx context.Context, request mcp.CallT
 		if err != nil {
 			return nil, err
 		}
-		return addDialectHint(result), nil
+		return newJSONToolResult(result)
 	}
 
 	// If object_type is not specified, search all types
-	var results []string
+	var results []objectDescriptionResponse
 	objectTypes := []string{"table", "view", "procedure", "function"}
 
 	for _, objType := range objectTypes {
-		var result *mcp.CallToolResult
+		var result objectDescriptionResponse
 		var err error
 
 		switch objType {
@@ -284,8 +276,8 @@ func getSchemaObjectDefinitionToolHandler(ctx context.Context, request mcp.CallT
 			result, err = getFunctionDefinition(ctx, objectName)
 		}
 
-		if err == nil && result != nil {
-			results = append(results, result.Content[0].(mcp.TextContent).Text)
+		if err == nil {
+			results = append(results, result)
 		}
 	}
 
@@ -293,95 +285,93 @@ func getSchemaObjectDefinitionToolHandler(ctx context.Context, request mcp.CallT
 		return nil, fmt.Errorf("object '%s' not found (searched: table, view, procedure, function)", objectName)
 	}
 
-	result := mcp.NewToolResultText(strings.Join(results, "\n\n"+strings.Repeat("=", 50)+"\n\n"))
-	return addDialectHint(result), nil
+	if len(results) == 1 {
+		return newJSONToolResult(results[0])
+	}
+	return newJSONToolResult(map[string]interface{}{
+		"dialect": getSQLDialectName(),
+		"matches": results,
+	})
 }
 
 // ============================================================
 // Helper Functions for Object Listing
 // ============================================================
 
-func getObjectsByType(ctx context.Context, objectType string) []string {
-	var objects []string
+func getObjectsByType(ctx context.Context, objectType string) []objectInfo {
+	var objects []objectInfo
 
 	switch dbDriver {
 	case DriverMySQL:
 		switch objectType {
 		case "table":
-			objects = queryStrings(ctx, `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME`)
+			objects = queryObjects(ctx, objectType, `SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME`)
 		case "view":
-			objects = queryStrings(ctx, `SELECT TABLE_NAME FROM information_schema.VIEWS WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME`)
+			objects = queryObjects(ctx, objectType, `SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.VIEWS WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME`)
 		case "procedure":
-			objects = queryStrings(ctx, `SELECT ROUTINE_NAME FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_TYPE = 'PROCEDURE' ORDER BY ROUTINE_NAME`)
+			objects = queryObjects(ctx, objectType, `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_TYPE = 'PROCEDURE' ORDER BY ROUTINE_NAME`)
 		case "function":
-			objects = queryStrings(ctx, `SELECT ROUTINE_NAME FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_TYPE = 'FUNCTION' ORDER BY ROUTINE_NAME`)
+			objects = queryObjects(ctx, objectType, `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_TYPE = 'FUNCTION' ORDER BY ROUTINE_NAME`)
 		}
 
 	case DriverPostgres:
 		switch objectType {
 		case "table":
-			objects = queryStrings(ctx, `SELECT schemaname || '.' || tablename FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, tablename`)
+			objects = queryObjects(ctx, objectType, `SELECT schemaname, tablename FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, tablename`)
 		case "view":
-			objects = queryStrings(ctx, `SELECT schemaname || '.' || viewname FROM pg_catalog.pg_views WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, viewname`)
+			objects = queryObjects(ctx, objectType, `SELECT schemaname, viewname FROM pg_catalog.pg_views WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, viewname`)
 		case "procedure":
-			objects = queryStrings(ctx, `SELECT n.nspname || '.' || p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.prokind = 'p' ORDER BY p.proname`)
+			objects = queryObjects(ctx, objectType, `SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.prokind = 'p' ORDER BY n.nspname, p.proname`)
 		case "function":
-			objects = queryStrings(ctx, `SELECT n.nspname || '.' || p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.prokind IN ('f', 'a') ORDER BY p.proname`)
+			objects = queryObjects(ctx, objectType, `SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.prokind IN ('f', 'a') ORDER BY n.nspname, p.proname`)
 		}
 
 	case DriverSQLite:
 		switch objectType {
 		case "table":
-			objects = queryStrings(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+			objects = queryObjects(ctx, objectType, `SELECT '', name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
 		case "view":
-			objects = queryStrings(ctx, `SELECT name FROM sqlite_master WHERE type='view' ORDER BY name`)
+			objects = queryObjects(ctx, objectType, `SELECT '', name FROM sqlite_master WHERE type='view' ORDER BY name`)
 		}
 
 	case DriverMSSQL:
 		switch objectType {
 		case "table":
-			objects = queryStrings(ctx, `SELECT TABLE_SCHEMA + '.' + TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_SCHEMA, TABLE_NAME`)
+			objects = queryObjects(ctx, objectType, `SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_SCHEMA, TABLE_NAME`)
 		case "view":
-			objects = queryStrings(ctx, `SELECT TABLE_SCHEMA + '.' + TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS ORDER BY TABLE_SCHEMA, TABLE_NAME`)
+			objects = queryObjects(ctx, objectType, `SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS ORDER BY TABLE_SCHEMA, TABLE_NAME`)
 		case "procedure":
-			objects = queryStrings(ctx, `SELECT ROUTINE_SCHEMA + '.' + ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'PROCEDURE' ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME`)
+			objects = queryObjects(ctx, objectType, `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'PROCEDURE' ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME`)
 		case "function":
-			objects = queryStrings(ctx, `SELECT ROUTINE_SCHEMA + '.' + ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'FUNCTION' ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME`)
+			objects = queryObjects(ctx, objectType, `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'FUNCTION' ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME`)
 		}
 	}
 
 	return objects
 }
 
-func queryStrings(ctx context.Context, query string) []string {
-	rows, err := db.QueryContext(ctx, query)
+func queryObjects(ctx context.Context, objectType, query string, args ...interface{}) []objectInfo {
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil
 	}
 	defer rows.Close()
 
-	var results []string
+	var results []objectInfo
 	for rows.Next() {
-		var s string
-		if err := rows.Scan(&s); err != nil {
+		var schema, name string
+		if err := rows.Scan(&schema, &name); err != nil {
 			return results
 		}
-		results = append(results, s)
+		results = append(results, objectInfo{Type: objectType, Schema: schema, Name: name})
 	}
 	return results
 }
 
-func formatObjectList(label string, items []string) string {
-	if len(items) == 0 {
-		return ""
-	}
-	return fmt.Sprintf("%s: %s\n", label, strings.Join(items, ", "))
-}
-
-func filterByRegex(items []string, re *regexp.Regexp) []string {
-	var filtered []string
+func filterObjectsByRegex(items []objectInfo, re *regexp.Regexp) []objectInfo {
+	var filtered []objectInfo
 	for _, item := range items {
-		if re.MatchString(item) {
+		if re.MatchString(item.Name) || re.MatchString(qualifiedName(item.Schema, item.Name)) {
 			filtered = append(filtered, item)
 		}
 	}
@@ -458,250 +448,237 @@ func getSQLDialectName() string {
 	}
 }
 
-func addDialectHint(result *mcp.CallToolResult) *mcp.CallToolResult {
-	if len(result.Content) == 0 {
-		return result
-	}
-	content := result.Content[0].(mcp.TextContent)
-	dialect := getSQLDialectName()
-	hint := fmt.Sprintf("\n\n[SQL Dialect: %s]", dialect)
-	result.Content[0] = mcp.TextContent{
-		Type: content.Type,
-		Text: content.Text + hint,
-	}
-	return result
-}
-
 // ============================================================
 // Driver-Specific Queries for Definitions
 // ============================================================
 
 // getTableDefinition returns table structure (columns, types, constraints)
-func getTableDefinition(ctx context.Context, objectName string) (*mcp.CallToolResult, error) {
-	query := ""
+func getTableDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
+	obj := parseQualifiedObjectName(objectName)
+	response := objectDescriptionResponse{
+		Object:  objectInfo{Type: "table", Schema: obj.Schema, Name: obj.Name},
+		Dialect: getSQLDialectName(),
+	}
 
 	switch dbDriver {
 	case DriverMySQL:
-		query = fmt.Sprintf(`
-			SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_COMMENT
+		rows, err := db.QueryContext(ctx, `
+			SELECT COLUMN_NAME AS name, DATA_TYPE AS type, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS default_value, COLUMN_COMMENT AS comment
 			FROM information_schema.COLUMNS
-			WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '%s'
-			ORDER BY ORDINAL_POSITION`, objectName)
+			WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ?
+			ORDER BY ORDINAL_POSITION`, obj.Schema, obj.Name)
+		if err != nil {
+			return response, fmt.Errorf("failed to get table definition: %v", err)
+		}
+		defer rows.Close()
+		columns, err := parseSQLRows(rows)
+		if err != nil {
+			return response, fmt.Errorf("failed to parse table definition: %v", err)
+		}
+		response.Columns = columns
 
 	case DriverPostgres:
-		query = fmt.Sprintf(`
-			SELECT column_name, data_type, is_nullable, column_default
+		rows, err := db.QueryContext(ctx, `
+			SELECT column_name AS name, data_type AS type, is_nullable AS nullable, column_default AS default_value
 			FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name = '%s'
-			ORDER BY ordinal_position`, objectName)
+			WHERE table_schema = COALESCE(NULLIF($1, ''), 'public') AND table_name = $2
+			ORDER BY ordinal_position`, obj.Schema, obj.Name)
+		if err != nil {
+			return response, fmt.Errorf("failed to get table definition: %v", err)
+		}
+		defer rows.Close()
+		columns, err := parseSQLRows(rows)
+		if err != nil {
+			return response, fmt.Errorf("failed to parse table definition: %v", err)
+		}
+		response.Columns = columns
 
 	case DriverSQLite:
-		query = fmt.Sprintf(`PRAGMA table_info(%s)`, objectName)
+		rows, err := db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, quoteSQLiteIdentifier(obj.Name)))
+		if err != nil {
+			return response, fmt.Errorf("failed to get table definition: %v", err)
+		}
+		defer rows.Close()
+		columns, err := parseSQLRows(rows)
+		if err != nil {
+			return response, fmt.Errorf("failed to parse table definition: %v", err)
+		}
+		response.Columns = columns
 
 	case DriverMSSQL:
-		query = fmt.Sprintf(`
-			SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT
+		rows, err := db.QueryContext(ctx, `
+			SELECT COLUMN_NAME AS name, DATA_TYPE AS type, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS default_value
 			FROM INFORMATION_SCHEMA.COLUMNS
-			WHERE TABLE_NAME = '%s'
-			ORDER BY ORDINAL_POSITION`, objectName)
+			WHERE TABLE_SCHEMA = COALESCE(NULLIF(@p1, ''), SCHEMA_NAME()) AND TABLE_NAME = @p2
+			ORDER BY ORDINAL_POSITION`, obj.Schema, obj.Name)
+		if err != nil {
+			return response, fmt.Errorf("failed to get table definition: %v", err)
+		}
+		defer rows.Close()
+		columns, err := parseSQLRows(rows)
+		if err != nil {
+			return response, fmt.Errorf("failed to parse table definition: %v", err)
+		}
+		response.Columns = columns
 	}
 
-	rows, err := db.QueryContext(ctx, query)
+	if len(response.Columns) == 0 {
+		return response, fmt.Errorf("table '%s' not found", objectName)
+	}
+
+	response.Indexes = getIndexInfo(ctx, obj)
+	return response, nil
+}
+
+func getViewDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
+	obj := parseQualifiedObjectName(objectName)
+	response := objectDescriptionResponse{
+		Object:  objectInfo{Type: "view", Schema: obj.Schema, Name: obj.Name},
+		Dialect: getSQLDialectName(),
+	}
+	var row *sql.Row
+
+	switch dbDriver {
+	case DriverMySQL:
+		row = db.QueryRowContext(ctx, `SELECT VIEW_DEFINITION FROM information_schema.VIEWS WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ?`, obj.Schema, obj.Name)
+
+	case DriverPostgres:
+		row = db.QueryRowContext(ctx, `SELECT definition FROM pg_views WHERE schemaname = COALESCE(NULLIF($1, ''), 'public') AND viewname = $2`, obj.Schema, obj.Name)
+
+	case DriverSQLite:
+		row = db.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'view' AND name = ?`, obj.Name)
+
+	case DriverMSSQL:
+		row = db.QueryRowContext(ctx, `SELECT VIEW_DEFINITION FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = COALESCE(NULLIF(@p1, ''), SCHEMA_NAME()) AND TABLE_NAME = @p2`, obj.Schema, obj.Name)
+	}
+
+	err := row.Scan(&response.Definition)
 	if err != nil {
-		log.Printf("Get table definition error: %v\n", err)
-		return nil, fmt.Errorf("failed to get table definition: %v", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return response, fmt.Errorf("view '%s' not found", objectName)
+		}
+		return response, fmt.Errorf("failed to get view definition: %v", err)
+	}
+	return response, nil
+}
+
+func getProcedureDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
+	obj := parseQualifiedObjectName(objectName)
+	response := objectDescriptionResponse{
+		Object:  objectInfo{Type: "procedure", Schema: obj.Schema, Name: obj.Name},
+		Dialect: getSQLDialectName(),
+	}
+	var row *sql.Row
+
+	switch dbDriver {
+	case DriverMySQL:
+		row = db.QueryRowContext(ctx, `SELECT ROUTINE_DEFINITION FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND ROUTINE_NAME = ? AND ROUTINE_TYPE = 'PROCEDURE'`, obj.Schema, obj.Name)
+
+	case DriverPostgres:
+		row = db.QueryRowContext(ctx, `
+			SELECT pg_get_functiondef(p.oid)
+			FROM pg_proc p
+			JOIN pg_namespace n ON p.pronamespace = n.oid
+			WHERE n.nspname = COALESCE(NULLIF($1, ''), 'public') AND p.proname = $2 AND p.prokind = 'p'`, obj.Schema, obj.Name)
+
+	case DriverSQLite:
+		return response, errors.New("SQLite does not support stored procedures")
+
+	case DriverMSSQL:
+		row = db.QueryRowContext(ctx, `SELECT OBJECT_DEFINITION(OBJECT_ID(@p1))`, sqlServerQualifiedName(obj))
+	}
+
+	err := row.Scan(&response.Definition)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return response, fmt.Errorf("procedure '%s' not found", objectName)
+		}
+		return response, fmt.Errorf("failed to get procedure definition: %v", err)
+	}
+	return response, nil
+}
+
+func getFunctionDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
+	obj := parseQualifiedObjectName(objectName)
+	response := objectDescriptionResponse{
+		Object:  objectInfo{Type: "function", Schema: obj.Schema, Name: obj.Name},
+		Dialect: getSQLDialectName(),
+	}
+	var row *sql.Row
+
+	switch dbDriver {
+	case DriverMySQL:
+		row = db.QueryRowContext(ctx, `SELECT ROUTINE_DEFINITION FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND ROUTINE_NAME = ? AND ROUTINE_TYPE = 'FUNCTION'`, obj.Schema, obj.Name)
+
+	case DriverPostgres:
+		row = db.QueryRowContext(ctx, `
+			SELECT pg_get_functiondef(p.oid)
+			FROM pg_proc p
+			JOIN pg_namespace n ON p.pronamespace = n.oid
+			WHERE n.nspname = COALESCE(NULLIF($1, ''), 'public') AND p.proname = $2`, obj.Schema, obj.Name)
+
+	case DriverSQLite:
+		return response, errors.New("SQLite does not support user-defined functions")
+
+	case DriverMSSQL:
+		row = db.QueryRowContext(ctx, `SELECT OBJECT_DEFINITION(OBJECT_ID(@p1))`, sqlServerQualifiedName(obj))
+	}
+
+	err := row.Scan(&response.Definition)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return response, fmt.Errorf("function '%s' not found", objectName)
+		}
+		return response, fmt.Errorf("failed to get function definition: %v", err)
+	}
+	return response, nil
+}
+
+func getIndexInfo(ctx context.Context, obj qualifiedObjectName) []map[string]interface{} {
+	var rows *sql.Rows
+	var err error
+
+	switch dbDriver {
+	case DriverMySQL:
+		rows, err = db.QueryContext(ctx, `SELECT INDEX_NAME AS name, COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique, SEQ_IN_INDEX AS seq FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX`, obj.Schema, obj.Name)
+
+	case DriverPostgres:
+		rows, err = db.QueryContext(ctx, `SELECT indexname AS name, indexdef AS definition FROM pg_indexes WHERE schemaname = COALESCE(NULLIF($1, ''), 'public') AND tablename = $2 ORDER BY indexname`, obj.Schema, obj.Name)
+
+	case DriverSQLite:
+		rows, err = db.QueryContext(ctx, fmt.Sprintf(`PRAGMA index_list(%s)`, quoteSQLiteIdentifier(obj.Name)))
+
+	case DriverMSSQL:
+		rows, err = db.QueryContext(ctx, `SELECT i.name AS name, c.name AS column_name FROM sys.indexes i JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id WHERE i.object_id = OBJECT_ID(@p1) ORDER BY i.name, ic.key_ordinal`, sqlServerQualifiedName(obj))
+	}
+
+	if err != nil {
+		return nil
 	}
 	defer rows.Close()
 
 	results, err := parseSQLRows(rows)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse table definition: %v", err)
+		return nil
 	}
-
-	if len(results) == 0 {
-		return nil, fmt.Errorf("table '%s' not found", objectName)
-	}
-
-	indexInfo := getIndexInfo(ctx, objectName)
-
-	var output strings.Builder
-	output.WriteString(fmt.Sprintf("Table definition for '%s':\n", objectName))
-	output.WriteString(formatAsTable(results))
-	if indexInfo != "" {
-		output.WriteString("\nIndexes:\n")
-		output.WriteString(indexInfo)
-	}
-
-	return mcp.NewToolResultText(output.String()), nil
+	return results
 }
 
-func getViewDefinition(ctx context.Context, objectName string) (*mcp.CallToolResult, error) {
-	query := ""
-
-	switch dbDriver {
-	case DriverMySQL:
-		query = fmt.Sprintf(`SELECT VIEW_DEFINITION FROM information_schema.VIEWS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '%s'`, objectName)
-
-	case DriverPostgres:
-		query = fmt.Sprintf(`SELECT definition FROM pg_views WHERE schemaname = 'public' AND viewname = '%s'`, objectName)
-
-	case DriverSQLite:
-		query = fmt.Sprintf(`SELECT SQL FROM sqlite_master WHERE TYPE='view' AND NAME='%s'`, objectName)
-
-	case DriverMSSQL:
-		query = fmt.Sprintf(`SELECT VIEW_DEFINITION FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_NAME = '%s'`, objectName)
-	}
-
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		log.Printf("Get view definition error: %v\n", err)
-		return nil, fmt.Errorf("failed to get view definition: %v", err)
-	}
-	defer rows.Close()
-
-	var definition string
-	for rows.Next() {
-		if err := rows.Scan(&definition); err != nil {
-			return nil, fmt.Errorf("error scanning view definition: %v", err)
-		}
-	}
-
-	if definition == "" {
-		return nil, fmt.Errorf("view '%s' not found", objectName)
-	}
-
-	return mcp.NewToolResultText(fmt.Sprintf("View definition for '%s':\n\n%s", objectName, definition)), nil
-}
-
-func getProcedureDefinition(ctx context.Context, objectName string) (*mcp.CallToolResult, error) {
-	query := ""
-
-	switch dbDriver {
-	case DriverMySQL:
-		query = fmt.Sprintf(`SELECT ROUTINE_DEFINITION FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_NAME = '%s' AND ROUTINE_TYPE = 'PROCEDURE'`, objectName)
-
-	case DriverPostgres:
-		query = fmt.Sprintf(`
-			SELECT pg_get_functiondef(p.oid)
-			FROM pg_proc p
-			JOIN pg_namespace n ON p.pronamespace = n.oid
-			WHERE n.nspname = 'public' AND p.proname = '%s' AND p.prokind = 'p'`, objectName)
-
-	case DriverSQLite:
-		return nil, errors.New("SQLite does not support stored procedures")
-
-	case DriverMSSQL:
-		query = fmt.Sprintf(`SELECT OBJECT_DEFINITION(OBJECT_ID('%s'))`, objectName)
-	}
-
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		log.Printf("Get procedure definition error: %v\n", err)
-		return nil, fmt.Errorf("failed to get procedure definition: %v", err)
-	}
-	defer rows.Close()
-
-	var definition string
-	for rows.Next() {
-		if err := rows.Scan(&definition); err != nil {
-			return nil, fmt.Errorf("error scanning procedure definition: %v", err)
-		}
-	}
-
-	if definition == "" {
-		return nil, fmt.Errorf("procedure '%s' not found", objectName)
-	}
-
-	return mcp.NewToolResultText(fmt.Sprintf("Procedure definition for '%s':\n\n%s", objectName, definition)), nil
-}
-
-func getFunctionDefinition(ctx context.Context, objectName string) (*mcp.CallToolResult, error) {
-	query := ""
-
-	switch dbDriver {
-	case DriverMySQL:
-		query = fmt.Sprintf(`SELECT ROUTINE_DEFINITION FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_NAME = '%s' AND ROUTINE_TYPE = 'FUNCTION'`, objectName)
-
-	case DriverPostgres:
-		query = fmt.Sprintf(`
-			SELECT pg_get_functiondef(p.oid)
-			FROM pg_proc p
-			JOIN pg_namespace n ON p.pronamespace = n.oid
-			WHERE n.nspname = 'public' AND p.proname = '%s'`, objectName)
-
-	case DriverSQLite:
-		return nil, errors.New("SQLite does not support user-defined functions")
-
-	case DriverMSSQL:
-		query = fmt.Sprintf(`SELECT OBJECT_DEFINITION(OBJECT_ID('%s'))`, objectName)
-	}
-
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		log.Printf("Get function definition error: %v\n", err)
-		return nil, fmt.Errorf("failed to get function definition: %v", err)
-	}
-	defer rows.Close()
-
-	var definition string
-	for rows.Next() {
-		if err := rows.Scan(&definition); err != nil {
-			return nil, fmt.Errorf("error scanning function definition: %v", err)
-		}
-	}
-
-	if definition == "" {
-		return nil, fmt.Errorf("function '%s' not found", objectName)
-	}
-
-	return mcp.NewToolResultText(fmt.Sprintf("Function definition for '%s':\n\n%s", objectName, definition)), nil
-}
-
-func getIndexInfo(ctx context.Context, tableName string) string {
-	query := ""
-
-	switch dbDriver {
-	case DriverMySQL:
-		query = fmt.Sprintf(`SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SEQ_IN_INDEX FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '%s' ORDER BY INDEX_NAME, SEQ_IN_INDEX`, tableName)
-
-	case DriverPostgres:
-		query = fmt.Sprintf(`SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = '%s'`, tableName)
-
-	case DriverSQLite:
-		query = fmt.Sprintf(`PRAGMA index_list(%s)`, tableName)
-
-	case DriverMSSQL:
-		query = fmt.Sprintf(`SELECT i.name AS index_name, c.name AS column_name FROM sys.indexes i JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id WHERE i.object_id = OBJECT_ID('%s') ORDER BY i.name, ic.key_ordinal`, tableName)
-	}
-
-	if query == "" {
-		return ""
-	}
-
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		return ""
-	}
-	defer rows.Close()
-
-	results, err := parseSQLRows(rows)
-	if err != nil || len(results) == 0 {
-		return "  No indexes defined"
-	}
-
-	return formatAsTable(results)
-}
-
-func parseSQLRowsWithLimit(rows *sql.Rows, maxRows int) ([]map[string]interface{}, error) {
+func parseSQLRowsWithLimit(rows *sql.Rows, maxRows int) (queryResponse, error) {
 	cols, err := rows.Columns()
 	if err != nil {
-		return nil, err
+		return queryResponse{}, err
 	}
 
-	var results []map[string]interface{}
+	response := queryResponse{
+		Format:  "columnar_rows",
+		Columns: cols,
+		Rows:    [][]interface{}{},
+	}
 	count := 0
 	for rows.Next() {
 		if maxRows > 0 && count >= maxRows {
+			response.Truncated = true
 			break
 		}
 		values := make([]interface{}, len(cols))
@@ -711,53 +688,228 @@ func parseSQLRowsWithLimit(rows *sql.Rows, maxRows int) ([]map[string]interface{
 		}
 
 		if err := rows.Scan(pointers...); err != nil {
-			return nil, err
+			return response, err
 		}
 
-		row := make(map[string]interface{})
-		for i, col := range cols {
-			row[col] = values[i]
+		row := make([]interface{}, len(cols))
+		for i := range cols {
+			row[i] = normalizeSQLValue(values[i])
 		}
-		results = append(results, row)
+		response.Rows = append(response.Rows, row)
 		count++
 	}
 
-	return results, nil
+	if err := rows.Err(); err != nil {
+		return response, err
+	}
+
+	response.RowCount = len(response.Rows)
+	return response, nil
 }
 
 func parseSQLRows(rows *sql.Rows) ([]map[string]interface{}, error) {
-	return parseSQLRowsWithLimit(rows, 0)
-}
-
-func formatAsTable(results []map[string]interface{}) string {
-	if len(results) == 0 {
-		return ""
+	result, err := parseSQLRowsWithLimit(rows, 0)
+	if err != nil {
+		return nil, err
 	}
-
-	var sb strings.Builder
-
-	var columns []string
-	for k := range results[0] {
-		columns = append(columns, k)
-	}
-
-	sb.WriteString(strings.Join(columns, " | "))
-	sb.WriteString("\n")
-	sb.WriteString(strings.Repeat("-", len(strings.Join(columns, " | "))))
-	sb.WriteString("\n")
-
-	for _, row := range results {
-		var values []string
-		for _, col := range columns {
-			values = append(values, fmt.Sprintf("%v", row[col]))
+	mapped := make([]map[string]interface{}, 0, len(result.Rows))
+	for _, row := range result.Rows {
+		item := make(map[string]interface{}, len(result.Columns))
+		for i, col := range result.Columns {
+			item[col] = row[i]
 		}
-		sb.WriteString(strings.Join(values, " | "))
-		sb.WriteString("\n")
+		mapped = append(mapped, item)
 	}
-
-	return sb.String()
+	return mapped, nil
 }
 
-func sanitizeInput(input string) string {
-	return strings.ReplaceAll(input, "'", "''")
+func newJSONToolResult(value interface{}) (*mcp.CallToolResult, error) {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+func normalizeSQLValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case []byte:
+		return string(v)
+	default:
+		return v
+	}
+}
+
+func validateReadQuery(sqlStmt string) error {
+	cleaned := strings.TrimSpace(stripSQLComments(sqlStmt))
+	if cleaned == "" {
+		return errors.New("query must not be empty")
+	}
+	if hasMultipleStatements(cleaned) {
+		return errors.New("query must contain exactly one statement")
+	}
+
+	upper := strings.ToUpper(strings.TrimSpace(strings.TrimSuffix(cleaned, ";")))
+	allowedLeading := regexp.MustCompile(`^(SELECT|WITH|EXPLAIN|SHOW|DESCRIBE)\b`)
+	if !allowedLeading.MatchString(upper) {
+		return errors.New("query only allows read-oriented statements: SELECT, WITH, EXPLAIN, SHOW, DESCRIBE")
+	}
+
+	upperWithoutLiterals := strings.ToUpper(stripSQLStringLiterals(upper))
+	blocked := regexp.MustCompile(`\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|MERGE|CALL|EXEC|GRANT|REVOKE|REPLACE|VACUUM|ANALYZE|ATTACH|DETACH)\b`)
+	if blocked.MatchString(upperWithoutLiterals) {
+		return errors.New("query contains a mutating or unsafe SQL keyword; use execute for write operations")
+	}
+	if strings.Contains(upperWithoutLiterals, "PRAGMA WRITABLE_SCHEMA") {
+		return errors.New("query contains an unsafe SQLite pragma")
+	}
+	return nil
+}
+
+func stripSQLComments(sqlStmt string) string {
+	var b strings.Builder
+	inSingle := false
+	inDouble := false
+	inLineComment := false
+	inBlockComment := false
+	runes := []rune(sqlStmt)
+
+	for i := 0; i < len(runes); i++ {
+		ch := runes[i]
+		next := rune(0)
+		if i+1 < len(runes) {
+			next = runes[i+1]
+		}
+
+		if inLineComment {
+			if ch == '\n' {
+				inLineComment = false
+				b.WriteRune(ch)
+			}
+			continue
+		}
+		if inBlockComment {
+			if ch == '*' && next == '/' {
+				inBlockComment = false
+				i++
+			}
+			continue
+		}
+		if !inSingle && !inDouble && ch == '-' && next == '-' {
+			inLineComment = true
+			i++
+			continue
+		}
+		if !inSingle && !inDouble && ch == '/' && next == '*' {
+			inBlockComment = true
+			i++
+			continue
+		}
+		if ch == '\'' && !inDouble {
+			inSingle = !inSingle
+		}
+		if ch == '"' && !inSingle {
+			inDouble = !inDouble
+		}
+		b.WriteRune(ch)
+	}
+	return b.String()
+}
+
+func hasMultipleStatements(sqlStmt string) bool {
+	inSingle := false
+	inDouble := false
+	runes := []rune(sqlStmt)
+	for i, ch := range runes {
+		if ch == '\'' && !inDouble {
+			inSingle = !inSingle
+			continue
+		}
+		if ch == '"' && !inSingle {
+			inDouble = !inDouble
+			continue
+		}
+		if ch == ';' && !inSingle && !inDouble {
+			rest := strings.TrimSpace(string(runes[i+1:]))
+			return rest != ""
+		}
+	}
+	return false
+}
+
+func stripSQLStringLiterals(sqlStmt string) string {
+	var b strings.Builder
+	inSingle := false
+	inDouble := false
+	runes := []rune(sqlStmt)
+	for i := 0; i < len(runes); i++ {
+		ch := runes[i]
+		if ch == '\'' && !inDouble {
+			if inSingle && i+1 < len(runes) && runes[i+1] == '\'' {
+				i++
+				continue
+			}
+			inSingle = !inSingle
+			b.WriteRune(' ')
+			continue
+		}
+		if ch == '"' && !inSingle {
+			inDouble = !inDouble
+			b.WriteRune(' ')
+			continue
+		}
+		if inSingle || inDouble {
+			b.WriteRune(' ')
+			continue
+		}
+		b.WriteRune(ch)
+	}
+	return b.String()
+}
+
+func parseQualifiedObjectName(input string) qualifiedObjectName {
+	parts := strings.Split(strings.TrimSpace(input), ".")
+	if len(parts) == 1 {
+		return qualifiedObjectName{Name: trimIdentifierQuotes(parts[0])}
+	}
+	return qualifiedObjectName{
+		Schema: trimIdentifierQuotes(parts[len(parts)-2]),
+		Name:   trimIdentifierQuotes(parts[len(parts)-1]),
+	}
+}
+
+func trimIdentifierQuotes(input string) string {
+	input = strings.TrimSpace(input)
+	input = strings.Trim(input, "`")
+	input = strings.Trim(input, `"`)
+	input = strings.Trim(input, `[]`)
+	return input
+}
+
+func qualifiedName(schema, name string) string {
+	if schema == "" {
+		return name
+	}
+	return schema + "." + name
+}
+
+func quoteSQLiteIdentifier(name string) string {
+	var b strings.Builder
+	b.WriteRune('"')
+	for _, ch := range name {
+		if ch == '"' {
+			b.WriteString(`""`)
+			continue
+		}
+		b.WriteRune(ch)
+	}
+	b.WriteRune('"')
+	return b.String()
+}
+
+func sqlServerQualifiedName(obj qualifiedObjectName) string {
+	if obj.Schema == "" {
+		return obj.Name
+	}
+	return obj.Schema + "." + obj.Name
 }

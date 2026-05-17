@@ -67,16 +67,16 @@ func main() {
 	dbVersion := getDBVersion()
 	dialectName := getSQLDialectName()
 
-	queryDesc := fmt.Sprintf("Execute a read-only SQL query (SELECT, EXPLAIN, SHOW, DESCRIBE). Current database: %s (%s %s).", dbName, dialectName, dbVersion)
+	queryDesc := fmt.Sprintf("Execute a read-oriented SQL query (SELECT, WITH, EXPLAIN, SHOW, DESCRIBE). Results are returned as compact JSON with columns plus row arrays. Current database: %s (%s %s).", dbName, dialectName, dbVersion)
 	executeDesc := fmt.Sprintf("Execute a write operation: DML (INSERT/UPDATE/DELETE), DDL (CREATE/ALTER/DROP), or call a stored procedure. Current database: %s (%s %s).", dbName, dialectName, dbVersion)
-	listObjectsDesc := fmt.Sprintf("List database objects (tables, views, procedures, functions). Current database: %s (%s %s).", dbName, dialectName, dbVersion)
-	getDefDesc := fmt.Sprintf("Get the definition/schema of a database object (table, view, procedure, function). Current database: %s (%s %s).", dbName, dialectName, dbVersion)
+	listObjectsDesc := fmt.Sprintf("List database objects (tables, views, procedures, functions) as JSON object records. Current database: %s (%s %s).", dbName, dialectName, dbVersion)
+	describeDesc := fmt.Sprintf("Describe a database object (table, view, procedure, function) as JSON metadata. Current database: %s (%s %s).", dbName, dialectName, dbVersion)
 
 	// Register tools
 	s.AddTool(queryTool(queryDesc), queryToolHandler)
 	s.AddTool(executeTool(executeDesc), executeToolHandler)
 	s.AddTool(listObjectsTool(listObjectsDesc), listObjectsToolHandler)
-	s.AddTool(getSchemaObjectDefinitionTool(getDefDesc), getSchemaObjectDefinitionToolHandler)
+	s.AddTool(describeObjectTool(describeDesc), describeObjectToolHandler)
 
 	addr := fmt.Sprintf(":%d", config.Port)
 
