@@ -1,0 +1,24 @@
+# Compiled binaries
+sql-mcp
+sql-mcp.exe
+
+# Data directory
+data/
+*.db
+
+# Build artifacts
+build/
+dist/
+
+# Environment files
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo

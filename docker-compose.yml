@@ -1,0 +1,22 @@
+services:
+  sql-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        DB_FILENAME: ${DB_FILENAME:-tcm_unified.db}
+    image: sql-mcp:latest
+    container_name: sql-mcp
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8088}:8088"
+    environment:
+      - SERVER_MODE=http
+      - SERVER_PORT=8088
+    volumes:
+      - ./data:/app/data
+    command: >
+      --dsn sqlite:///app/data/${DB_FILENAME:-tcm_unified.db}
+      --name tcm-db
+      --mode http
+      --port 8088
