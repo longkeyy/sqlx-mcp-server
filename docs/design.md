@@ -2,16 +2,18 @@
 
 ## Goal
 
-This server exposes a single configured SQL database as an MCP server. It is intended to let an LLM inspect database objects, read data, and execute database operations through a small tool surface.
+This server exposes a single configured SQL database as an MCP server. The tool contract should pass database facts to an LLM in the most direct and least ambiguous form possible: small tool names, explicit parameters, stable structured output, and no hidden prompt-like instructions inside data responses.
 
-## Current Tool Surface
+## Tool Surface
 
 The server registers four MCP tools:
 
-- `query`: executes a SQL query and returns rows.
-- `execute`: executes a write operation such as DML, DDL, or stored procedure calls.
+- `query`: executes a read-oriented SQL query and returns a compact structured result set.
+- `execute`: executes DML, DDL, or stored procedure calls.
 - `list_objects`: lists database objects by type.
-- `get_schema_object_definition`: returns the definition or schema details for a database object.
+- `describe_object`: describes one database object.
+
+`describe_object` is the preferred name because it matches what the tool actually does across object types. For tables, it returns structural metadata such as columns and indexes. For views, procedures, and functions, it returns the available definition text. The previous name, `get_schema_object_definition`, is longer and suggests that every object type has the same kind of definition, which is not true.
 
 The supported object types are:
 
@@ -20,9 +22,9 @@ The supported object types are:
 - `procedure`
 - `function`
 
-## Current Runtime Model
+## Runtime Model
 
-The process connects to one database at startup from a URL-style DSN. The active driver and connection pool are kept as package-level state. Tool handlers use that shared connection pool and switch on the active driver for database-specific metadata queries.
+The process connects to one database at startup from a URL-style DSN. The active database connection and dialect should be represented by an explicit server or tool context rather than broad package-level state when the code grows beyond the current single-binary shape.
 
 Supported database drivers:
 
@@ -37,26 +39,102 @@ Supported MCP transports:
 - SSE
 - streamable HTTP
 
-## Current Result Format
+## Result Format
 
-Query results are returned as plain text. The text contains a row count and a Go-formatted slice of row maps.
+Tool results should be valid JSON text. JSON gives the LLM a standard parser-friendly format while avoiding markdown table formatting and custom CSV/TSV escaping rules.
 
-Object listings are returned as plain text lines grouped by object type. The response also appends an XML-like context attachment that tells the LLM which schema and dialect are active, lists the discovered objects, and asks the LLM to fetch definitions before using objects.
+Query results use a compact table shape:
 
-Object definitions are returned as plain text. Table descriptions are formatted as a simple pipe-delimited table, while views, procedures, and functions return the retrieved definition text.
+```json
+{
+  "format": "columnar_rows",
+  "columns": ["id", "name", "created_at"],
+  "rows": [
+    [1, "alice", "2026-05-17T10:00:00Z"],
+    [2, "bob", null]
+  ],
+  "row_count": 2,
+  "truncated": false,
+  "max_rows": 1000,
+  "dialect": "PostgreSQL"
+}
+```
 
-## Current Safety Model
+This avoids repeating field names for every row, preserves column order, represents nulls clearly, and does not require the caller to understand Go's map formatting.
 
-The `query` tool is described as read-only, but the current handler directly executes the supplied SQL through the database driver. The `execute` tool directly executes write statements. The strongest runtime safety boundary is therefore the configured database account and its permissions.
+Object listings use object records:
 
-Object names used for metadata lookup are sanitized by escaping single quotes before being interpolated into driver-specific SQL strings.
+```json
+{
+  "database": "main",
+  "dialect": "SQLite",
+  "objects": [
+    {"type": "table", "name": "prescriptions"},
+    {"type": "view", "name": "active_prescriptions"}
+  ]
+}
+```
 
-## Known Limitations
+Object descriptions use semantic JSON. Table descriptions return columns and indexes. View, procedure, and function descriptions return definition text when available:
 
-- Query output is not a stable machine-readable format.
-- Map iteration may produce unstable column order.
-- `query` is not enforced as read-only by code.
-- Metadata lookup relies on string interpolation for object names.
-- PostgreSQL metadata lookup assumes the `public` schema in several paths.
-- The context attachment mixes database facts with instructions to the LLM.
-- Most MCP tool, metadata, and formatting logic is concentrated in one large source file.
+```json
+{
+  "object": {"type": "table", "schema": "public", "name": "users"},
+  "columns": [
+    {"name": "id", "type": "integer", "nullable": false, "default": null},
+    {"name": "name", "type": "text", "nullable": true, "default": null}
+  ],
+  "indexes": [
+    {"name": "users_pkey", "columns": ["id"], "unique": true}
+  ],
+  "dialect": "PostgreSQL"
+}
+```
+
+## Read Query Guard
+
+The `query` tool should enforce its read-oriented contract before sending SQL to the database. A regular-expression based check is acceptable as a first guardrail, but it is not a complete security boundary.
+
+The guard should:
+
+- Strip or ignore comments before classification.
+- Reject multiple statements.
+- Allow only read-oriented leading forms such as `SELECT`, `WITH`, `EXPLAIN`, `SHOW`, and `DESCRIBE`.
+- Reject known mutating forms such as `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, `TRUNCATE`, `MERGE`, `CALL`, `EXEC`, `GRANT`, `REVOKE`, and dialect-specific unsafe pragmas.
+
+The database account should still be configured with the least privileges required by the deployment, because SQL dialects can expose side effects through functions, extensions, or special statement forms.
+
+## Metadata Lookup
+
+Metadata lookup should avoid treating object names as arbitrary SQL fragments. The preferred shape is:
+
+- Parse a qualified object name into `schema` and `name` where the dialect supports schemas.
+- Use parameterized metadata queries wherever the database driver supports them.
+- Quote identifiers only when an identifier must appear in identifier position, such as SQLite PRAGMA statements.
+- Return schema-qualified object names from `list_objects` for databases that support schemas, and accept the same names in `describe_object`.
+
+## LLM Contract
+
+Tool responses should contain facts and explicit metadata, not hidden instructions. Instead of embedding XML-like prompt attachments, responses should carry fields such as:
+
+- `database`
+- `dialect`
+- `objects`
+- `definition_available`
+- `description`
+- `truncated`
+
+If the model should inspect an object before querying it, that belongs in the tool description or client policy, not as concealed instructions inside a data response.
+
+## Code Organization
+
+The current single-package layout is acceptable for a small binary, but the code should keep clear internal boundaries:
+
+- configuration and DSN parsing
+- MCP server setup
+- tool handlers
+- dialect-specific metadata queries
+- result encoding
+- read-query validation
+
+When the implementation grows, these boundaries should move into small internal packages or explicit types rather than more global helper functions.
