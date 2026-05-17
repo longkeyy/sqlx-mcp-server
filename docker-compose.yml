@@ -3,8 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        DB_FILENAME: ${DB_FILENAME:-tcm_unified.db}
     image: sql-mcp:latest
     container_name: sql-mcp
     restart: unless-stopped
