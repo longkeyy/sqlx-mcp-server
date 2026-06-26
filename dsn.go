@@ -18,12 +18,12 @@ const (
 
 // DSNConfig holds parsed DSN configuration
 type DSNConfig struct {
-	Driver    DriverType
-	RawDSN    string
-	ConnStr   string // Driver-specific connection string
-	Database  string
-	Host      string
-	Port      string
+	Driver   DriverType
+	RawDSN   string
+	ConnStr  string // Driver-specific connection string
+	Database string
+	Host     string
+	Port     string
 }
 
 // ParseDSN parses a standard URL-style DSN into driver-specific connection string
@@ -70,6 +70,9 @@ func ParseDSN(dsn string) (*DSNConfig, error) {
 		config.ConnStr = u.Path
 		if config.ConnStr == "" {
 			config.ConnStr = u.Host
+		}
+		if u.RawQuery != "" {
+			config.ConnStr += "?" + u.RawQuery
 		}
 	case DriverMSSQL:
 		config.ConnStr = dsnWithoutScheme
