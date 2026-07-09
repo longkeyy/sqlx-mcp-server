@@ -11,9 +11,17 @@ type DriverType string
 
 const (
 	DriverMySQL      DriverType = "mysql"
+	DriverMariaDB    DriverType = "mariadb"
+	DriverPercona    DriverType = "percona"
 	DriverTiDB       DriverType = "tidb"
 	DriverDoris      DriverType = "doris"
+	DriverOceanBase  DriverType = "oceanbase"
+	DriverStarRocks  DriverType = "starrocks"
 	DriverPostgres   DriverType = "postgres"
+	DriverCockroach  DriverType = "cockroach"
+	DriverGreenplum  DriverType = "greenplum"
+	DriverOpenGauss  DriverType = "opengauss"
+	DriverMogDB      DriverType = "mogdb"
 	DriverSQLite     DriverType = "sqlite"
 	DriverMSSQL      DriverType = "sqlserver"
 	DriverClickHouse DriverType = "clickhouse"
@@ -33,10 +41,18 @@ type DSNConfig struct {
 // ParseDSN parses a standard URL-style DSN into driver-specific connection string
 // Supported formats:
 //   - mysql://user:pass@host:port/dbname?params
+//   - mariadb://user:pass@host:port/dbname?params
+//   - percona://user:pass@host:port/dbname?params
 //   - tidb://user:pass@host:port/dbname?params
 //   - doris://user:pass@host:port/dbname?params
+//   - oceanbase://user:pass@host:port/dbname?params
+//   - starrocks://user:pass@host:port/dbname?params
 //   - postgres://user:pass@host:port/dbname?params
 //   - postgresql://user:pass@host:port/dbname?params
+//   - cockroach://user:pass@host:port/dbname?params
+//   - greenplum://user:pass@host:port/dbname?params
+//   - opengauss://user:pass@host:port/dbname?params
+//   - mogdb://user:pass@host:port/dbname?params
 //   - sqlite:///path/to/db.sqlite
 //   - sqlserver://user:pass@host:port/dbname?params
 //   - clickhouse://user:pass@host:port/dbname?params
@@ -48,7 +64,7 @@ func ParseDSN(dsn string) (*DSNConfig, error) {
 	// Detect driver from DSN prefix
 	driver, dsnWithoutScheme := detectDriver(dsn)
 	if driver == "" {
-		return nil, fmt.Errorf("unsupported DSN scheme, supported: mysql://, tidb://, doris://, postgres://, postgresql://, sqlite://, sqlserver://, clickhouse://")
+		return nil, fmt.Errorf("unsupported DSN scheme, supported: mysql://, mariadb://, percona://, tidb://, doris://, oceanbase://, starrocks://, postgres://, postgresql://, cockroach://, greenplum://, opengauss://, mogdb://, sqlite://, sqlserver://, clickhouse://")
 	}
 
 	// Parse as URL
@@ -70,14 +86,23 @@ func ParseDSN(dsn string) (*DSNConfig, error) {
 	switch driver {
 	case DriverMySQL:
 		config.ConnStr, err = buildMySQLDSN(u, "3306")
+	case DriverMariaDB, DriverPercona, DriverOceanBase:
+		config.SQLDriver = string(DriverMySQL)
+		config.ConnStr, err = buildMySQLDSN(u, "3306")
 	case DriverTiDB:
 		config.SQLDriver = string(DriverMySQL)
 		config.ConnStr, err = buildMySQLDSN(u, "4000")
 	case DriverDoris:
 		config.SQLDriver = string(DriverMySQL)
 		config.ConnStr, err = buildMySQLDSN(u, "9030")
+	case DriverStarRocks:
+		config.SQLDriver = string(DriverMySQL)
+		config.ConnStr, err = buildMySQLDSN(u, "9030")
 	case DriverPostgres:
 		config.ConnStr = dsnWithoutScheme
+	case DriverCockroach, DriverGreenplum, DriverOpenGauss, DriverMogDB:
+		config.SQLDriver = string(DriverPostgres)
+		config.ConnStr = replaceDSNScheme(dsnWithoutScheme, string(DriverPostgres))
 	case DriverSQLite:
 		// sqlite:///path/to/db -> /path/to/db
 		// sqlite://./relative -> ./relative
@@ -110,10 +135,18 @@ func detectDriver(dsn string) (DriverType, string) {
 		driver DriverType
 	}{
 		{"mysql://", DriverMySQL},
+		{"mariadb://", DriverMariaDB},
+		{"percona://", DriverPercona},
 		{"tidb://", DriverTiDB},
 		{"doris://", DriverDoris},
+		{"oceanbase://", DriverOceanBase},
+		{"starrocks://", DriverStarRocks},
 		{"postgresql://", DriverPostgres},
 		{"postgres://", DriverPostgres},
+		{"cockroach://", DriverCockroach},
+		{"greenplum://", DriverGreenplum},
+		{"opengauss://", DriverOpenGauss},
+		{"mogdb://", DriverMogDB},
 		{"sqlite://", DriverSQLite},
 		{"sqlserver://", DriverMSSQL},
 		{"clickhouse://", DriverClickHouse},
@@ -147,4 +180,11 @@ func buildMySQLDSN(u *url.URL, defaultPort string) (string, error) {
 	}
 
 	return connStr, nil
+}
+
+func replaceDSNScheme(dsn, scheme string) string {
+	if idx := strings.Index(dsn, "://"); idx != -1 {
+		return scheme + dsn[idx:]
+	}
+	return dsn
 }

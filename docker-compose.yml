@@ -17,6 +17,8 @@ services:
       # - DATABASE_EVENTS_URL=clickhouse://user:pass@clickhouse:9000/events
       # - DATABASE_TIDB_URL=tidb://user:pass@tidb:4000/app
       # - DATABASE_DORIS_URL=doris://user:pass@doris-fe:9030/warehouse
+      # - DATABASE_OB_URL=oceanbase://user:pass@oceanbase:3306/app
+      # - DATABASE_ROACH_URL=cockroach://user:pass@cockroach:26257/app
       # - DEFAULT_DATABASE=TCM
       # Optional pool defaults/overrides:
       # - DATABASE_MAX_OPEN_CONNS=25
