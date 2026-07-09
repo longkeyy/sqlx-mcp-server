@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"database/sql"
@@ -7,49 +7,52 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mark3labs/mcp-go/server"
+	mcpserver "github.com/mark3labs/mcp-go/server"
+
+	"github.com/longkeyy/sqlx-mcp-server/internal/config"
+	"github.com/longkeyy/sqlx-mcp-server/internal/dsn"
 )
 
-type appServer struct {
+type AppServer struct {
 	id        string
 	name      string
 	db        *sql.DB
-	driver    DriverType
-	dsnConfig *DSNConfig
-	mcpServer *server.MCPServer
+	driver    dsn.Driver
+	dsnConfig *dsn.Config
+	mcpServer *mcpserver.MCPServer
 }
 
-func newAppServer(config DatabaseConfig) (*appServer, error) {
-	dsnConfig, err := ParseDSN(config.DSN)
+func newAppServer(cfg config.DatabaseConfig) (*AppServer, error) {
+	dsnConfig, err := dsn.Parse(cfg.DSN)
 	if err != nil {
-		return nil, fmt.Errorf("invalid DSN for database %q: %w", config.ID, err)
+		return nil, fmt.Errorf("invalid DSN for database %q: %w", cfg.ID, err)
 	}
 
-	db, err := openConnectionPool(dsnConfig, config)
+	db, err := openConnectionPool(dsnConfig, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("database %q connection failed: %w", config.ID, err)
+		return nil, fmt.Errorf("database %q connection failed: %w", cfg.ID, err)
 	}
 
-	app := &appServer{
-		id:        config.ID,
-		name:      config.Name,
+	app := &AppServer{
+		id:        cfg.ID,
+		name:      cfg.Name,
 		db:        db,
 		driver:    dsnConfig.Driver,
 		dsnConfig: dsnConfig,
 	}
 	app.mcpServer = app.buildMCPServer()
-	log.Printf("Successfully connected to database %q (%s): %s", app.id, app.driver, MaskDSN(dsnConfig.RawDSN))
+	log.Printf("Successfully connected to database %q (%s): %s", app.id, app.driver, config.MaskDSN(dsnConfig.RawDSN))
 	return app, nil
 }
 
-func openConnectionPool(dsnConfig *DSNConfig, config DatabaseConfig) (*sql.DB, error) {
+func openConnectionPool(dsnConfig *dsn.Config, cfg config.DatabaseConfig) (*sql.DB, error) {
 	db, err := sql.Open(dsnConfig.SQLDriver, dsnConfig.ConnStr)
 	if err != nil {
 		return nil, err
 	}
 
-	db.SetMaxOpenConns(config.MaxOpenConns)
-	db.SetMaxIdleConns(config.MaxIdleConns)
+	db.SetMaxOpenConns(cfg.MaxOpenConns)
+	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	db.SetConnMaxLifetime(5 * time.Minute)
 	db.SetConnMaxIdleTime(2 * time.Minute)
 
@@ -61,20 +64,24 @@ func openConnectionPool(dsnConfig *DSNConfig, config DatabaseConfig) (*sql.DB, e
 	return db, nil
 }
 
-func (a *appServer) close() {
+func (a *AppServer) close() {
 	if a.db != nil {
 		_ = a.db.Close()
 	}
 }
 
-func (a *appServer) buildMCPServer() *server.MCPServer {
+func (a *AppServer) MCPServer() *mcpserver.MCPServer {
+	return a.mcpServer
+}
+
+func (a *AppServer) buildMCPServer() *mcpserver.MCPServer {
 	instanceName := a.name
 	if instanceName == "" {
 		instanceName = "sql-mcp-" + a.id
 	}
 	instanceName += " 🚀"
 
-	s := server.NewMCPServer(instanceName, "1.0.0")
+	s := mcpserver.NewMCPServer(instanceName, "1.0.0")
 
 	dbName := a.getCurrentDatabase()
 	dbVersion := a.getDBVersion()
@@ -93,8 +100,8 @@ func (a *appServer) buildMCPServer() *server.MCPServer {
 	return s
 }
 
-func buildAppServers(configs []DatabaseConfig) (map[string]*appServer, error) {
-	apps := make(map[string]*appServer, len(configs))
+func BuildAppServers(configs []config.DatabaseConfig) (map[string]*AppServer, error) {
+	apps := make(map[string]*AppServer, len(configs))
 	for _, config := range configs {
 		app, err := newAppServer(config)
 		if err != nil {
@@ -108,13 +115,13 @@ func buildAppServers(configs []DatabaseConfig) (map[string]*appServer, error) {
 	return apps, nil
 }
 
-func closeAppServers(apps map[string]*appServer) {
+func CloseAppServers(apps map[string]*AppServer) {
 	for _, app := range apps {
 		app.close()
 	}
 }
 
-func getDefaultApp(apps map[string]*appServer, defaultID string) (*appServer, error) {
+func GetDefaultApp(apps map[string]*AppServer, defaultID string) (*AppServer, error) {
 	app := apps[defaultID]
 	if app == nil {
 		return nil, fmt.Errorf("default database %q was not initialized", defaultID)
@@ -122,33 +129,33 @@ func getDefaultApp(apps map[string]*appServer, defaultID string) (*appServer, er
 	return app, nil
 }
 
-func mountHTTPServers(mux *http.ServeMux, apps map[string]*appServer, defaultID string) error {
-	defaultApp, err := getDefaultApp(apps, defaultID)
+func MountHTTPServers(mux *http.ServeMux, apps map[string]*AppServer, defaultID string) error {
+	defaultApp, err := GetDefaultApp(apps, defaultID)
 	if err != nil {
 		return err
 	}
-	mux.Handle("/mcp", server.NewStreamableHTTPServer(defaultApp.mcpServer))
+	mux.Handle("/mcp", mcpserver.NewStreamableHTTPServer(defaultApp.mcpServer))
 
 	for id, app := range apps {
-		mux.Handle("/db/"+id+"/mcp", server.NewStreamableHTTPServer(app.mcpServer, server.WithEndpointPath("/db/"+id+"/mcp")))
+		mux.Handle("/db/"+id+"/mcp", mcpserver.NewStreamableHTTPServer(app.mcpServer, mcpserver.WithEndpointPath("/db/"+id+"/mcp")))
 	}
 	return nil
 }
 
-func mountSSEServers(mux *http.ServeMux, apps map[string]*appServer, defaultID string) error {
-	defaultApp, err := getDefaultApp(apps, defaultID)
+func MountSSEServers(mux *http.ServeMux, apps map[string]*AppServer, defaultID string) error {
+	defaultApp, err := GetDefaultApp(apps, defaultID)
 	if err != nil {
 		return err
 	}
-	defaultSSE := server.NewSSEServer(defaultApp.mcpServer)
+	defaultSSE := mcpserver.NewSSEServer(defaultApp.mcpServer)
 	mux.Handle("/sse", defaultSSE)
 	mux.Handle("/message", defaultSSE)
 
 	for id, app := range apps {
-		sse := server.NewSSEServer(
+		sse := mcpserver.NewSSEServer(
 			app.mcpServer,
-			server.WithSSEEndpoint("/db/"+id+"/sse"),
-			server.WithMessageEndpoint("/db/"+id+"/message"),
+			mcpserver.WithSSEEndpoint("/db/"+id+"/sse"),
+			mcpserver.WithMessageEndpoint("/db/"+id+"/message"),
 		)
 		mux.Handle("/db/"+id+"/sse", sse)
 		mux.Handle("/db/"+id+"/message", sse)

@@ -1,10 +1,11 @@
-package main
+package server
 
 import (
 	"context"
 	"encoding/json"
 	"testing"
 
+	"github.com/longkeyy/sqlx-mcp-server/internal/config"
 	_ "modernc.org/sqlite"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -37,11 +38,7 @@ func TestValidateReadQuery(t *testing.T) {
 func TestSQLiteToolsReturnStructuredJSON(t *testing.T) {
 	ctx := context.Background()
 
-	app, err := newAppServer(DatabaseConfig{
-		ID:   "test",
-		Name: "test-db",
-		DSN:  sqliteFileDSN(t, "structured"),
-	})
+	app, err := newAppServer(testDatabaseConfig("test", "test-db", sqliteFileDSN(t, "structured")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,12 +95,12 @@ CREATE VIEW user_names AS SELECT name FROM users;`); err != nil {
 
 func TestSQLiteToolHandlersUseInstanceConnection(t *testing.T) {
 	ctx := context.Background()
-	appA, err := newAppServer(DatabaseConfig{ID: "a", Name: "a", DSN: sqliteFileDSN(t, "a")})
+	appA, err := newAppServer(testDatabaseConfig("a", "a", sqliteFileDSN(t, "a")))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(appA.close)
-	appB, err := newAppServer(DatabaseConfig{ID: "b", Name: "b", DSN: sqliteFileDSN(t, "b")})
+	appB, err := newAppServer(testDatabaseConfig("b", "b", sqliteFileDSN(t, "b")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,4 +171,14 @@ func hasObject(objects []objectInfo, name string) bool {
 func sqliteFileDSN(t *testing.T, name string) string {
 	t.Helper()
 	return "sqlite://" + t.TempDir() + "/" + name + ".db"
+}
+
+func testDatabaseConfig(id, name, dsn string) config.DatabaseConfig {
+	return config.DatabaseConfig{
+		ID:           id,
+		Name:         name,
+		DSN:          dsn,
+		MaxOpenConns: 25,
+		MaxIdleConns: 1,
+	}
 }

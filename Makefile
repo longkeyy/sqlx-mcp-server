@@ -65,9 +65,9 @@ endef
 # Go development build command
 define build_go_dev
 	$(if $(shell if [ -d cmd ] && [ $$(find cmd -mindepth 1 -maxdepth 1 -type d | wc -l) -gt 0 ]; then echo "multi"; fi), \
-		CGO_ENABLED=0 go build -o $(2) -ldflags "-X main.Version=$(VERSION)" cmd/$(1)/*, \
+		CGO_ENABLED=0 go build -o $(2) -ldflags "-X main.Version=$(VERSION)" ./cmd/$(1), \
 		$(if $(shell [ -d cmd ] && [ -f cmd/main.go ] && echo "single"), \
-			CGO_ENABLED=0 go build -o $(2) -ldflags "-X main.Version=$(VERSION)" cmd/*, \
+			CGO_ENABLED=0 go build -o $(2) -ldflags "-X main.Version=$(VERSION)" ./cmd, \
 			CGO_ENABLED=0 go build -o $(2) -ldflags "-X main.Version=$(VERSION)" . \
 		) \
 	)
@@ -98,14 +98,14 @@ define build_go_release
 			-trimpath \
 			-a \
 			-ldflags "-s -w -extldflags -static -X main.Version=$(VERSION)" \
-			cmd/$(1)/*, \
+			./cmd/$(1), \
 		$(if $(shell [ -d cmd ] && [ -f cmd/main.go ] && echo "single"), \
 			CGO_ENABLED=0 GOOS=$(3) GOARCH=$(4) go build \
 				-o $(2) \
 				-trimpath \
 				-a \
 				-ldflags "-s -w -extldflags -static -X main.Version=$(VERSION)" \
-				cmd/*, \
+				./cmd, \
 			CGO_ENABLED=0 GOOS=$(3) GOARCH=$(4) go build \
 				-o $(2) \
 				-trimpath \

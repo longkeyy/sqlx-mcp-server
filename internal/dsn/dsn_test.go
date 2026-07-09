@@ -1,4 +1,4 @@
-package main
+package dsn
 
 import "testing"
 
@@ -6,7 +6,7 @@ func TestParseDSNMySQLCompatibleDrivers(t *testing.T) {
 	tests := []struct {
 		name       string
 		dsn        string
-		driver     DriverType
+		driver     Driver
 		sqlDriver  string
 		connSubstr string
 	}{
@@ -49,7 +49,7 @@ func TestParseDSNMySQLCompatibleDrivers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config, err := ParseDSN(tt.dsn)
+			config, err := Parse(tt.dsn)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -70,7 +70,7 @@ func TestParseDSNPostgresCompatibleDrivers(t *testing.T) {
 	tests := []struct {
 		name      string
 		dsn       string
-		driver    DriverType
+		driver    Driver
 		connStr   string
 		sqlDriver string
 	}{
@@ -106,7 +106,7 @@ func TestParseDSNPostgresCompatibleDrivers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config, err := ParseDSN(tt.dsn)
+			config, err := Parse(tt.dsn)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -124,7 +124,7 @@ func TestParseDSNPostgresCompatibleDrivers(t *testing.T) {
 }
 
 func TestParseDSNClickHouse(t *testing.T) {
-	config, err := ParseDSN("clickhouse://user:pass@clickhouse.example:9000/default?secure=true")
+	config, err := Parse("clickhouse://user:pass@clickhouse.example:9000/default?secure=true")
 	if err != nil {
 		t.Fatal(err)
 	}

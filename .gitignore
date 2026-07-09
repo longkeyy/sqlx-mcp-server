@@ -1,8 +1,8 @@
 # Compiled binaries
-sql-mcp
-sql-mcp.exe
-sql-mcp-server
-sqlx-mcp-server
+/sql-mcp
+/sql-mcp.exe
+/sql-mcp-server
+/sqlx-mcp-server
 
 # Data directory
 data/

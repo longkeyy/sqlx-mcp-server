@@ -1,4 +1,4 @@
-package main
+package dsn
 
 import (
 	"fmt"
@@ -6,30 +6,30 @@ import (
 	"strings"
 )
 
-// DriverType represents the type of database driver
-type DriverType string
+// Driver represents the type of database driver
+type Driver string
 
 const (
-	DriverMySQL      DriverType = "mysql"
-	DriverMariaDB    DriverType = "mariadb"
-	DriverPercona    DriverType = "percona"
-	DriverTiDB       DriverType = "tidb"
-	DriverDoris      DriverType = "doris"
-	DriverOceanBase  DriverType = "oceanbase"
-	DriverStarRocks  DriverType = "starrocks"
-	DriverPostgres   DriverType = "postgres"
-	DriverCockroach  DriverType = "cockroach"
-	DriverGreenplum  DriverType = "greenplum"
-	DriverOpenGauss  DriverType = "opengauss"
-	DriverMogDB      DriverType = "mogdb"
-	DriverSQLite     DriverType = "sqlite"
-	DriverMSSQL      DriverType = "sqlserver"
-	DriverClickHouse DriverType = "clickhouse"
+	DriverMySQL      Driver = "mysql"
+	DriverMariaDB    Driver = "mariadb"
+	DriverPercona    Driver = "percona"
+	DriverTiDB       Driver = "tidb"
+	DriverDoris      Driver = "doris"
+	DriverOceanBase  Driver = "oceanbase"
+	DriverStarRocks  Driver = "starrocks"
+	DriverPostgres   Driver = "postgres"
+	DriverCockroach  Driver = "cockroach"
+	DriverGreenplum  Driver = "greenplum"
+	DriverOpenGauss  Driver = "opengauss"
+	DriverMogDB      Driver = "mogdb"
+	DriverSQLite     Driver = "sqlite"
+	DriverMSSQL      Driver = "sqlserver"
+	DriverClickHouse Driver = "clickhouse"
 )
 
-// DSNConfig holds parsed DSN configuration
-type DSNConfig struct {
-	Driver    DriverType
+// Config holds parsed DSN configuration
+type Config struct {
+	Driver    Driver
 	SQLDriver string
 	RawDSN    string
 	ConnStr   string // Driver-specific connection string
@@ -38,7 +38,7 @@ type DSNConfig struct {
 	Port      string
 }
 
-// ParseDSN parses a standard URL-style DSN into driver-specific connection string
+// Parse parses a standard URL-style DSN into a driver-specific connection string.
 // Supported formats:
 //   - mysql://user:pass@host:port/dbname?params
 //   - mariadb://user:pass@host:port/dbname?params
@@ -56,7 +56,7 @@ type DSNConfig struct {
 //   - sqlite:///path/to/db.sqlite
 //   - sqlserver://user:pass@host:port/dbname?params
 //   - clickhouse://user:pass@host:port/dbname?params
-func ParseDSN(dsn string) (*DSNConfig, error) {
+func Parse(dsn string) (*Config, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("empty DSN")
 	}
@@ -73,7 +73,7 @@ func ParseDSN(dsn string) (*DSNConfig, error) {
 		return nil, fmt.Errorf("invalid DSN: %w", err)
 	}
 
-	config := &DSNConfig{
+	config := &Config{
 		Driver:    driver,
 		SQLDriver: string(driver),
 		RawDSN:    dsn,
@@ -129,10 +129,10 @@ func ParseDSN(dsn string) (*DSNConfig, error) {
 }
 
 // detectDriver extracts driver type from DSN scheme
-func detectDriver(dsn string) (DriverType, string) {
+func detectDriver(dsn string) (Driver, string) {
 	schemes := []struct {
 		prefix string
-		driver DriverType
+		driver Driver
 	}{
 		{"mysql://", DriverMySQL},
 		{"mariadb://", DriverMariaDB},

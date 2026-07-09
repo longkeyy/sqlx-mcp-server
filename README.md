@@ -24,7 +24,7 @@ Run with SQLite:
 DATABASE_URL=sqlite:///tmp/example.db \
 SERVER_MODE=http \
 SERVER_PORT=8088 \
-go run .
+go run ./cmd/sql-mcp
 ```
 
 The Streamable HTTP MCP endpoint is:
@@ -36,7 +36,7 @@ http://localhost:8088/mcp
 Run with stdio:
 
 ```bash
-go run . --dsn sqlite:///tmp/example.db --mode stdio
+go run ./cmd/sql-mcp --dsn sqlite:///tmp/example.db --mode stdio
 ```
 
 ## Docker
@@ -319,15 +319,12 @@ If a client wants an LLM to inspect an object before querying it, that policy be
 
 ### Code Organization
 
-The current single-package layout is acceptable for a small binary, but the code keeps these boundaries visible:
+The project uses a conventional Go binary plus internal package layout:
 
-- Configuration and DSN parsing.
-- Runtime database instance setup.
-- MCP server setup.
-- Tool handlers.
-- Dialect-specific metadata queries.
-- Result encoding.
-- Read-query validation.
+- `cmd/sql-mcp`: executable entrypoint, transport selection, and driver registration.
+- `internal/config`: command-line and environment configuration.
+- `internal/dsn`: URL-style DSN parsing and driver mapping.
+- `internal/server`: per-database MCP server setup, tool handlers, metadata queries, result encoding, and read-query validation.
 
 If the implementation grows, these boundaries should move into small internal packages or explicit types rather than broad package-level state.
 
@@ -348,7 +345,7 @@ CGO_ENABLED=0 go test ./...
 Build for Linux ARM64:
 
 ```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o dist/sql-mcp-linux-arm64 .
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o dist/sql-mcp-linux-arm64 ./cmd/sql-mcp
 ```
 
 Build all release targets from the Makefile:

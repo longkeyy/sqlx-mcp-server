@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"flag"
@@ -47,9 +47,9 @@ type DatabaseConfig struct {
 	MaxIdleConns int
 }
 
-// ParseConfig parses configuration from command line flags and environment variables
+// Parse reads configuration from command-line flags and environment variables.
 // Priority: CLI flags > Environment variables > .env file
-func ParseConfig() (*AppConfig, error) {
+func Parse() (*AppConfig, error) {
 	return parseConfig(os.Args[1:], envMapFromOS())
 }
 

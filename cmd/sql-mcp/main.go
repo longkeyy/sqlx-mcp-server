@@ -10,9 +10,12 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
-	"github.com/mark3labs/mcp-go/server"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 	_ "github.com/microsoft/go-mssqldb"
 	_ "modernc.org/sqlite"
+
+	"github.com/longkeyy/sqlx-mcp-server/internal/config"
+	sqlmcp "github.com/longkeyy/sqlx-mcp-server/internal/server"
 )
 
 func init() {
@@ -24,33 +27,32 @@ func init() {
 }
 
 func main() {
-	// Parse configuration
-	config, err := ParseConfig()
+	cfg, err := config.Parse()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	apps, err := buildAppServers(config.Databases)
+	apps, err := sqlmcp.BuildAppServers(cfg.Databases)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer closeAppServers(apps)
+	defer sqlmcp.CloseAppServers(apps)
 
-	addr := fmt.Sprintf(":%d", config.Port)
-	log.Printf("Starting %d database instance(s) in %s mode on %s; default=%s", len(apps), config.ServerMode, addr, config.DefaultDatabase)
+	addr := fmt.Sprintf(":%d", cfg.Port)
+	log.Printf("Starting %d database instance(s) in %s mode on %s; default=%s", len(apps), cfg.ServerMode, addr, cfg.DefaultDatabase)
 
-	switch config.ServerMode {
+	switch cfg.ServerMode {
 	case "stdio":
-		app, err := getDefaultApp(apps, config.DefaultDatabase)
+		app, err := sqlmcp.GetDefaultApp(apps, cfg.DefaultDatabase)
 		if err != nil {
 			log.Fatal(err)
 		}
-		if err := server.ServeStdio(app.mcpServer); err != nil {
+		if err := mcpserver.ServeStdio(app.MCPServer()); err != nil {
 			log.Printf("Stdio server error: %v\n", err)
 		}
 	case "sse":
 		mux := http.NewServeMux()
-		if err := mountSSEServers(mux, apps, config.DefaultDatabase); err != nil {
+		if err := sqlmcp.MountSSEServers(mux, apps, cfg.DefaultDatabase); err != nil {
 			log.Fatal(err)
 		}
 		log.Printf("SSE default endpoint listening on %s/sse; database endpoints on %s/db/{id}/sse", addr, addr)
@@ -59,7 +61,7 @@ func main() {
 		}
 	case "http":
 		mux := http.NewServeMux()
-		if err := mountHTTPServers(mux, apps, config.DefaultDatabase); err != nil {
+		if err := sqlmcp.MountHTTPServers(mux, apps, cfg.DefaultDatabase); err != nil {
 			log.Fatal(err)
 		}
 		log.Printf("StreamableHTTP default endpoint listening on %s/mcp; database endpoints on %s/db/{id}/mcp", addr, addr)
@@ -67,6 +69,6 @@ func main() {
 			log.Fatalf("Server error: %v", err)
 		}
 	default:
-		log.Fatalf("Unknown server mode: %s", config.ServerMode)
+		log.Fatalf("Unknown server mode: %s", cfg.ServerMode)
 	}
 }

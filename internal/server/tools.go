@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/longkeyy/sqlx-mcp-server/internal/dsn"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -106,7 +107,7 @@ func describeObjectTool(desc string) mcp.Tool {
 // Tool Handlers
 // ============================================================
 
-func (a *appServer) queryToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (a *AppServer) queryToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	sqlStmt, ok := request.GetArguments()["sql"].(string)
 	if !ok {
 		return nil, errors.New("invalid or missing 'sql' parameter")
@@ -137,7 +138,7 @@ func (a *appServer) queryToolHandler(ctx context.Context, request mcp.CallToolRe
 	return newJSONToolResult(results)
 }
 
-func (a *appServer) executeToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (a *AppServer) executeToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	sqlStmt, ok := request.GetArguments()["sql"].(string)
 	if !ok {
 		return nil, errors.New("invalid or missing 'sql' parameter")
@@ -157,7 +158,7 @@ func (a *appServer) executeToolHandler(ctx context.Context, request mcp.CallTool
 	return mcp.NewToolResultText("Operation successful."), nil
 }
 
-func (a *appServer) listObjectsToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (a *AppServer) listObjectsToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	objectType := "all"
 	if t, ok := request.GetArguments()["type"].(string); ok {
 		objectType = strings.ToLower(t)
@@ -222,7 +223,7 @@ func (a *appServer) listObjectsToolHandler(ctx context.Context, request mcp.Call
 	return newJSONToolResult(response)
 }
 
-func (a *appServer) describeObjectToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (a *AppServer) describeObjectToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	objectName, ok := request.GetArguments()["object_name"].(string)
 	if !ok {
 		return nil, errors.New("invalid or missing 'object_name' parameter")
@@ -298,11 +299,11 @@ func (a *appServer) describeObjectToolHandler(ctx context.Context, request mcp.C
 // Helper Functions for Object Listing
 // ============================================================
 
-func (a *appServer) getObjectsByType(ctx context.Context, objectType string) []objectInfo {
+func (a *AppServer) getObjectsByType(ctx context.Context, objectType string) []objectInfo {
 	var objects []objectInfo
 
 	switch a.driver {
-	case DriverMySQL, DriverMariaDB, DriverPercona, DriverTiDB, DriverDoris, DriverOceanBase, DriverStarRocks:
+	case dsn.DriverMySQL, dsn.DriverMariaDB, dsn.DriverPercona, dsn.DriverTiDB, dsn.DriverDoris, dsn.DriverOceanBase, dsn.DriverStarRocks:
 		switch objectType {
 		case "table":
 			objects = a.queryObjects(ctx, objectType, `SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME`)
@@ -314,7 +315,7 @@ func (a *appServer) getObjectsByType(ctx context.Context, objectType string) []o
 			objects = a.queryObjects(ctx, objectType, `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_TYPE = 'FUNCTION' ORDER BY ROUTINE_NAME`)
 		}
 
-	case DriverPostgres, DriverCockroach, DriverGreenplum, DriverOpenGauss, DriverMogDB:
+	case dsn.DriverPostgres, dsn.DriverCockroach, dsn.DriverGreenplum, dsn.DriverOpenGauss, dsn.DriverMogDB:
 		switch objectType {
 		case "table":
 			objects = a.queryObjects(ctx, objectType, `SELECT schemaname, tablename FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, tablename`)
@@ -326,7 +327,7 @@ func (a *appServer) getObjectsByType(ctx context.Context, objectType string) []o
 			objects = a.queryObjects(ctx, objectType, `SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.prokind IN ('f', 'a') ORDER BY n.nspname, p.proname`)
 		}
 
-	case DriverSQLite:
+	case dsn.DriverSQLite:
 		switch objectType {
 		case "table":
 			objects = a.queryObjects(ctx, objectType, `SELECT '', name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
@@ -334,7 +335,7 @@ func (a *appServer) getObjectsByType(ctx context.Context, objectType string) []o
 			objects = a.queryObjects(ctx, objectType, `SELECT '', name FROM sqlite_master WHERE type='view' ORDER BY name`)
 		}
 
-	case DriverMSSQL:
+	case dsn.DriverMSSQL:
 		switch objectType {
 		case "table":
 			objects = a.queryObjects(ctx, objectType, `SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_SCHEMA, TABLE_NAME`)
@@ -346,7 +347,7 @@ func (a *appServer) getObjectsByType(ctx context.Context, objectType string) []o
 			objects = a.queryObjects(ctx, objectType, `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'FUNCTION' ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME`)
 		}
 
-	case DriverClickHouse:
+	case dsn.DriverClickHouse:
 		switch objectType {
 		case "table":
 			objects = a.queryObjects(ctx, objectType, `SELECT database, name FROM system.tables WHERE database = currentDatabase() AND engine NOT IN ('View', 'MaterializedView', 'LiveView', 'WindowView') ORDER BY name`)
@@ -360,7 +361,7 @@ func (a *appServer) getObjectsByType(ctx context.Context, objectType string) []o
 	return objects
 }
 
-func (a *appServer) queryObjects(ctx context.Context, objectType, query string, args ...interface{}) []objectInfo {
+func (a *AppServer) queryObjects(ctx context.Context, objectType, query string, args ...interface{}) []objectInfo {
 	rows, err := a.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil
@@ -388,27 +389,27 @@ func filterObjectsByRegex(items []objectInfo, re *regexp.Regexp) []objectInfo {
 	return filtered
 }
 
-func (a *appServer) getCurrentDatabase() string {
+func (a *AppServer) getCurrentDatabase() string {
 	var dbName string
 	switch a.driver {
-	case DriverMySQL, DriverMariaDB, DriverPercona, DriverTiDB, DriverDoris, DriverOceanBase, DriverStarRocks:
+	case dsn.DriverMySQL, dsn.DriverMariaDB, dsn.DriverPercona, dsn.DriverTiDB, dsn.DriverDoris, dsn.DriverOceanBase, dsn.DriverStarRocks:
 		err := a.db.QueryRow(`SELECT DATABASE()`).Scan(&dbName)
 		if err != nil {
 			dbName = "unknown"
 		}
-	case DriverPostgres, DriverCockroach, DriverGreenplum, DriverOpenGauss, DriverMogDB:
+	case dsn.DriverPostgres, dsn.DriverCockroach, dsn.DriverGreenplum, dsn.DriverOpenGauss, dsn.DriverMogDB:
 		err := a.db.QueryRow(`SELECT current_database()`).Scan(&dbName)
 		if err != nil {
 			dbName = "unknown"
 		}
-	case DriverSQLite:
+	case dsn.DriverSQLite:
 		dbName = "main"
-	case DriverMSSQL:
+	case dsn.DriverMSSQL:
 		err := a.db.QueryRow(`SELECT DB_NAME()`).Scan(&dbName)
 		if err != nil {
 			dbName = "unknown"
 		}
-	case DriverClickHouse:
+	case dsn.DriverClickHouse:
 		err := a.db.QueryRow(`SELECT currentDatabase()`).Scan(&dbName)
 		if err != nil {
 			dbName = "unknown"
@@ -419,20 +420,20 @@ func (a *appServer) getCurrentDatabase() string {
 	return dbName
 }
 
-func (a *appServer) getDBVersion() string {
+func (a *AppServer) getDBVersion() string {
 	var version string
 	var err error
 
 	switch a.driver {
-	case DriverMySQL, DriverMariaDB, DriverPercona, DriverTiDB, DriverDoris, DriverOceanBase, DriverStarRocks:
+	case dsn.DriverMySQL, dsn.DriverMariaDB, dsn.DriverPercona, dsn.DriverTiDB, dsn.DriverDoris, dsn.DriverOceanBase, dsn.DriverStarRocks:
 		err = a.db.QueryRow(`SELECT VERSION()`).Scan(&version)
-	case DriverPostgres:
+	case dsn.DriverPostgres:
 		err = a.db.QueryRow(`SELECT VERSION()`).Scan(&version)
-	case DriverSQLite:
+	case dsn.DriverSQLite:
 		err = a.db.QueryRow(`SELECT SQLITE_VERSION()`).Scan(&version)
-	case DriverMSSQL:
+	case dsn.DriverMSSQL:
 		err = a.db.QueryRow(`SELECT @@VERSION`).Scan(&version)
-	case DriverClickHouse:
+	case dsn.DriverClickHouse:
 		err = a.db.QueryRow(`SELECT version()`).Scan(&version)
 	default:
 		return "Unknown"
@@ -450,37 +451,37 @@ func (a *appServer) getDBVersion() string {
 	return version
 }
 
-func (a *appServer) getSQLDialectName() string {
+func (a *AppServer) getSQLDialectName() string {
 	switch a.driver {
-	case DriverMySQL:
+	case dsn.DriverMySQL:
 		return "MySQL"
-	case DriverMariaDB:
+	case dsn.DriverMariaDB:
 		return "MariaDB"
-	case DriverPercona:
+	case dsn.DriverPercona:
 		return "Percona Server for MySQL"
-	case DriverTiDB:
+	case dsn.DriverTiDB:
 		return "TiDB"
-	case DriverDoris:
+	case dsn.DriverDoris:
 		return "Apache Doris"
-	case DriverOceanBase:
+	case dsn.DriverOceanBase:
 		return "OceanBase"
-	case DriverStarRocks:
+	case dsn.DriverStarRocks:
 		return "StarRocks"
-	case DriverPostgres:
+	case dsn.DriverPostgres:
 		return "PostgreSQL"
-	case DriverCockroach:
+	case dsn.DriverCockroach:
 		return "CockroachDB"
-	case DriverGreenplum:
+	case dsn.DriverGreenplum:
 		return "Greenplum"
-	case DriverOpenGauss:
+	case dsn.DriverOpenGauss:
 		return "openGauss"
-	case DriverMogDB:
+	case dsn.DriverMogDB:
 		return "MogDB"
-	case DriverSQLite:
+	case dsn.DriverSQLite:
 		return "SQLite"
-	case DriverMSSQL:
+	case dsn.DriverMSSQL:
 		return "SQL Server"
-	case DriverClickHouse:
+	case dsn.DriverClickHouse:
 		return "ClickHouse"
 	default:
 		return "SQL"
@@ -492,7 +493,7 @@ func (a *appServer) getSQLDialectName() string {
 // ============================================================
 
 // getTableDefinition returns table structure (columns, types, constraints)
-func (a *appServer) getTableDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
+func (a *AppServer) getTableDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
 	obj := parseQualifiedObjectName(objectName)
 	response := objectDescriptionResponse{
 		Object:  objectInfo{Type: "table", Schema: obj.Schema, Name: obj.Name},
@@ -500,7 +501,7 @@ func (a *appServer) getTableDefinition(ctx context.Context, objectName string) (
 	}
 
 	switch a.driver {
-	case DriverMySQL, DriverMariaDB, DriverPercona, DriverTiDB, DriverDoris, DriverOceanBase, DriverStarRocks:
+	case dsn.DriverMySQL, dsn.DriverMariaDB, dsn.DriverPercona, dsn.DriverTiDB, dsn.DriverDoris, dsn.DriverOceanBase, dsn.DriverStarRocks:
 		rows, err := a.db.QueryContext(ctx, `
 			SELECT COLUMN_NAME AS name, DATA_TYPE AS type, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS default_value, COLUMN_COMMENT AS comment
 			FROM information_schema.COLUMNS
@@ -516,7 +517,7 @@ func (a *appServer) getTableDefinition(ctx context.Context, objectName string) (
 		}
 		response.Columns = columns
 
-	case DriverPostgres, DriverCockroach, DriverGreenplum, DriverOpenGauss, DriverMogDB:
+	case dsn.DriverPostgres, dsn.DriverCockroach, dsn.DriverGreenplum, dsn.DriverOpenGauss, dsn.DriverMogDB:
 		rows, err := a.db.QueryContext(ctx, `
 			SELECT column_name AS name, data_type AS type, is_nullable AS nullable, column_default AS default_value
 			FROM information_schema.columns
@@ -532,7 +533,7 @@ func (a *appServer) getTableDefinition(ctx context.Context, objectName string) (
 		}
 		response.Columns = columns
 
-	case DriverSQLite:
+	case dsn.DriverSQLite:
 		rows, err := a.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, quoteSQLiteIdentifier(obj.Name)))
 		if err != nil {
 			return response, fmt.Errorf("failed to get table definition: %v", err)
@@ -544,7 +545,7 @@ func (a *appServer) getTableDefinition(ctx context.Context, objectName string) (
 		}
 		response.Columns = columns
 
-	case DriverClickHouse:
+	case dsn.DriverClickHouse:
 		rows, err := a.db.QueryContext(ctx, `
 			SELECT name, type, if(default_expression = '', NULL, default_expression) AS default_value, comment
 			FROM system.columns
@@ -560,7 +561,7 @@ func (a *appServer) getTableDefinition(ctx context.Context, objectName string) (
 		}
 		response.Columns = columns
 
-	case DriverMSSQL:
+	case dsn.DriverMSSQL:
 		rows, err := a.db.QueryContext(ctx, `
 			SELECT COLUMN_NAME AS name, DATA_TYPE AS type, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS default_value
 			FROM INFORMATION_SCHEMA.COLUMNS
@@ -585,7 +586,7 @@ func (a *appServer) getTableDefinition(ctx context.Context, objectName string) (
 	return response, nil
 }
 
-func (a *appServer) getViewDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
+func (a *AppServer) getViewDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
 	obj := parseQualifiedObjectName(objectName)
 	response := objectDescriptionResponse{
 		Object:  objectInfo{Type: "view", Schema: obj.Schema, Name: obj.Name},
@@ -594,19 +595,19 @@ func (a *appServer) getViewDefinition(ctx context.Context, objectName string) (o
 	var row *sql.Row
 
 	switch a.driver {
-	case DriverMySQL, DriverMariaDB, DriverPercona, DriverTiDB, DriverDoris, DriverOceanBase, DriverStarRocks:
+	case dsn.DriverMySQL, dsn.DriverMariaDB, dsn.DriverPercona, dsn.DriverTiDB, dsn.DriverDoris, dsn.DriverOceanBase, dsn.DriverStarRocks:
 		row = a.db.QueryRowContext(ctx, `SELECT VIEW_DEFINITION FROM information_schema.VIEWS WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ?`, obj.Schema, obj.Name)
 
-	case DriverPostgres, DriverCockroach, DriverGreenplum, DriverOpenGauss, DriverMogDB:
+	case dsn.DriverPostgres, dsn.DriverCockroach, dsn.DriverGreenplum, dsn.DriverOpenGauss, dsn.DriverMogDB:
 		row = a.db.QueryRowContext(ctx, `SELECT definition FROM pg_views WHERE schemaname = COALESCE(NULLIF($1, ''), 'public') AND viewname = $2`, obj.Schema, obj.Name)
 
-	case DriverSQLite:
+	case dsn.DriverSQLite:
 		row = a.db.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'view' AND name = ?`, obj.Name)
 
-	case DriverMSSQL:
+	case dsn.DriverMSSQL:
 		row = a.db.QueryRowContext(ctx, `SELECT VIEW_DEFINITION FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = COALESCE(NULLIF(@p1, ''), SCHEMA_NAME()) AND TABLE_NAME = @p2`, obj.Schema, obj.Name)
 
-	case DriverClickHouse:
+	case dsn.DriverClickHouse:
 		row = a.db.QueryRowContext(ctx, `SELECT create_table_query FROM system.tables WHERE database = if(? = '', currentDatabase(), ?) AND name = ? AND engine IN ('View', 'MaterializedView', 'LiveView', 'WindowView')`, obj.Schema, obj.Schema, obj.Name)
 	}
 
@@ -620,7 +621,7 @@ func (a *appServer) getViewDefinition(ctx context.Context, objectName string) (o
 	return response, nil
 }
 
-func (a *appServer) getProcedureDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
+func (a *AppServer) getProcedureDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
 	obj := parseQualifiedObjectName(objectName)
 	response := objectDescriptionResponse{
 		Object:  objectInfo{Type: "procedure", Schema: obj.Schema, Name: obj.Name},
@@ -629,23 +630,23 @@ func (a *appServer) getProcedureDefinition(ctx context.Context, objectName strin
 	var row *sql.Row
 
 	switch a.driver {
-	case DriverMySQL, DriverMariaDB, DriverPercona, DriverTiDB, DriverDoris, DriverOceanBase, DriverStarRocks:
+	case dsn.DriverMySQL, dsn.DriverMariaDB, dsn.DriverPercona, dsn.DriverTiDB, dsn.DriverDoris, dsn.DriverOceanBase, dsn.DriverStarRocks:
 		row = a.db.QueryRowContext(ctx, `SELECT ROUTINE_DEFINITION FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND ROUTINE_NAME = ? AND ROUTINE_TYPE = 'PROCEDURE'`, obj.Schema, obj.Name)
 
-	case DriverPostgres, DriverCockroach, DriverGreenplum, DriverOpenGauss, DriverMogDB:
+	case dsn.DriverPostgres, dsn.DriverCockroach, dsn.DriverGreenplum, dsn.DriverOpenGauss, dsn.DriverMogDB:
 		row = a.db.QueryRowContext(ctx, `
 			SELECT pg_get_functiondef(p.oid)
 			FROM pg_proc p
 			JOIN pg_namespace n ON p.pronamespace = n.oid
 			WHERE n.nspname = COALESCE(NULLIF($1, ''), 'public') AND p.proname = $2 AND p.prokind = 'p'`, obj.Schema, obj.Name)
 
-	case DriverSQLite:
+	case dsn.DriverSQLite:
 		return response, errors.New("SQLite does not support stored procedures")
 
-	case DriverClickHouse:
+	case dsn.DriverClickHouse:
 		return response, errors.New("ClickHouse does not support stored procedures")
 
-	case DriverMSSQL:
+	case dsn.DriverMSSQL:
 		row = a.db.QueryRowContext(ctx, `SELECT OBJECT_DEFINITION(OBJECT_ID(@p1))`, sqlServerQualifiedName(obj))
 	}
 
@@ -659,7 +660,7 @@ func (a *appServer) getProcedureDefinition(ctx context.Context, objectName strin
 	return response, nil
 }
 
-func (a *appServer) getFunctionDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
+func (a *AppServer) getFunctionDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
 	obj := parseQualifiedObjectName(objectName)
 	response := objectDescriptionResponse{
 		Object:  objectInfo{Type: "function", Schema: obj.Schema, Name: obj.Name},
@@ -668,20 +669,20 @@ func (a *appServer) getFunctionDefinition(ctx context.Context, objectName string
 	var row *sql.Row
 
 	switch a.driver {
-	case DriverMySQL, DriverMariaDB, DriverPercona, DriverTiDB, DriverDoris, DriverOceanBase, DriverStarRocks:
+	case dsn.DriverMySQL, dsn.DriverMariaDB, dsn.DriverPercona, dsn.DriverTiDB, dsn.DriverDoris, dsn.DriverOceanBase, dsn.DriverStarRocks:
 		row = a.db.QueryRowContext(ctx, `SELECT ROUTINE_DEFINITION FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND ROUTINE_NAME = ? AND ROUTINE_TYPE = 'FUNCTION'`, obj.Schema, obj.Name)
 
-	case DriverPostgres, DriverCockroach, DriverGreenplum, DriverOpenGauss, DriverMogDB:
+	case dsn.DriverPostgres, dsn.DriverCockroach, dsn.DriverGreenplum, dsn.DriverOpenGauss, dsn.DriverMogDB:
 		row = a.db.QueryRowContext(ctx, `
 			SELECT pg_get_functiondef(p.oid)
 			FROM pg_proc p
 			JOIN pg_namespace n ON p.pronamespace = n.oid
 			WHERE n.nspname = COALESCE(NULLIF($1, ''), 'public') AND p.proname = $2`, obj.Schema, obj.Name)
 
-	case DriverSQLite:
+	case dsn.DriverSQLite:
 		return response, errors.New("SQLite does not support user-defined functions")
 
-	case DriverClickHouse:
+	case dsn.DriverClickHouse:
 		var name string
 		err := a.db.QueryRowContext(ctx, `SELECT name FROM system.functions WHERE name = ?`, obj.Name).Scan(&name)
 		if err != nil {
@@ -693,7 +694,7 @@ func (a *appServer) getFunctionDefinition(ctx context.Context, objectName string
 		response.Definition = "ClickHouse function: " + name
 		return response, nil
 
-	case DriverMSSQL:
+	case dsn.DriverMSSQL:
 		row = a.db.QueryRowContext(ctx, `SELECT OBJECT_DEFINITION(OBJECT_ID(@p1))`, sqlServerQualifiedName(obj))
 	}
 
@@ -707,24 +708,24 @@ func (a *appServer) getFunctionDefinition(ctx context.Context, objectName string
 	return response, nil
 }
 
-func (a *appServer) getIndexInfo(ctx context.Context, obj qualifiedObjectName) []map[string]interface{} {
+func (a *AppServer) getIndexInfo(ctx context.Context, obj qualifiedObjectName) []map[string]interface{} {
 	var rows *sql.Rows
 	var err error
 
 	switch a.driver {
-	case DriverMySQL, DriverMariaDB, DriverPercona, DriverTiDB, DriverDoris, DriverOceanBase, DriverStarRocks:
+	case dsn.DriverMySQL, dsn.DriverMariaDB, dsn.DriverPercona, dsn.DriverTiDB, dsn.DriverDoris, dsn.DriverOceanBase, dsn.DriverStarRocks:
 		rows, err = a.db.QueryContext(ctx, `SELECT INDEX_NAME AS name, COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique, SEQ_IN_INDEX AS seq FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX`, obj.Schema, obj.Name)
 
-	case DriverPostgres, DriverCockroach, DriverGreenplum, DriverOpenGauss, DriverMogDB:
+	case dsn.DriverPostgres, dsn.DriverCockroach, dsn.DriverGreenplum, dsn.DriverOpenGauss, dsn.DriverMogDB:
 		rows, err = a.db.QueryContext(ctx, `SELECT indexname AS name, indexdef AS definition FROM pg_indexes WHERE schemaname = COALESCE(NULLIF($1, ''), 'public') AND tablename = $2 ORDER BY indexname`, obj.Schema, obj.Name)
 
-	case DriverSQLite:
+	case dsn.DriverSQLite:
 		rows, err = a.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA index_list(%s)`, quoteSQLiteIdentifier(obj.Name)))
 
-	case DriverMSSQL:
+	case dsn.DriverMSSQL:
 		rows, err = a.db.QueryContext(ctx, `SELECT i.name AS name, c.name AS column_name FROM sys.indexes i JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id WHERE i.object_id = OBJECT_ID(@p1) ORDER BY i.name, ic.key_ordinal`, sqlServerQualifiedName(obj))
 
-	case DriverClickHouse:
+	case dsn.DriverClickHouse:
 		return nil
 	}
 

@@ -2,7 +2,7 @@
 
 ## Goal
 
-This server exposes a single configured SQL database as an MCP server. The tool contract should pass database facts to an LLM in the most direct and least ambiguous form possible: small tool names, explicit parameters, stable structured output, and no hidden prompt-like instructions inside data responses.
+This server exposes configured SQL databases as MCP servers. The tool contract should pass database facts to an LLM in the most direct and least ambiguous form possible: small tool names, explicit parameters, stable structured output, and no hidden prompt-like instructions inside data responses.
 
 ## Tool Surface
 
@@ -24,7 +24,7 @@ The supported object types are:
 
 ## Runtime Model
 
-The process connects to one database at startup from a URL-style DSN. The active database connection and dialect should be represented by an explicit server or tool context rather than broad package-level state when the code grows beyond the current single-binary shape.
+The process connects to configured databases at startup from URL-style DSNs. Each active database connection and dialect is represented by an explicit server instance instead of broad package-level state.
 
 `DATABASE_URL` is the source of truth for the legacy/default target database and includes the database name or SQLite file path. `INSTANCE_NAME` only controls the MCP server display/logging name. `DB_NAME` is accepted only as a legacy alias for the instance name and should not be used in new deployments.
 
@@ -168,13 +168,11 @@ If the model should inspect an object before querying it, that belongs in the to
 
 ## Code Organization
 
-The current single-package layout is acceptable for a small binary, but the code should keep clear internal boundaries:
+The project follows the usual Go binary plus internal package layout:
 
-- configuration and DSN parsing
-- MCP server setup
-- tool handlers
-- dialect-specific metadata queries
-- result encoding
-- read-query validation
+- `cmd/sql-mcp`: executable entrypoint, transport selection, and driver registration.
+- `internal/config`: command-line and environment configuration, including multi-database and pool settings.
+- `internal/dsn`: URL-style DSN parsing and protocol-compatible driver mapping.
+- `internal/server`: per-database MCP server setup, tool handlers, dialect-specific metadata queries, result encoding, and read-query validation.
 
-When the implementation grows, these boundaries should move into small internal packages or explicit types rather than more global helper functions.
+New shared implementation should stay under `internal/` unless it is intentionally exported as a public Go API.
