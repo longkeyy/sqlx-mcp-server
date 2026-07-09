@@ -31,13 +31,12 @@ The process connects to configured databases at startup from URL-style DSNs. Eac
 Multiple databases can be configured with Docker-friendly environment variables:
 
 ```text
-DATABASE_TCM_URL=sqlite:///app/data/tcm_unified.db
-DATABASE_HERB_URL=sqlite:///app/data/herb.db
+DATABASE_APP_URL=sqlite:///app/data/app.db
 DATABASE_REPORTING_URL=postgres://user:pass@host:5432/reporting
 DATABASE_EVENTS_URL=clickhouse://user:pass@clickhouse:9000/events
 DATABASE_OB_URL=oceanbase://user:pass@oceanbase:3306/app
 DATABASE_ROACH_URL=cockroach://user:pass@roach:26257/app
-DEFAULT_DATABASE=TCM
+DEFAULT_DATABASE=APP
 ```
 
 The middle token in `DATABASE_{ID}_URL` becomes the stable lowercase route id. `DATABASE_{ID}_NAME` is optional and controls the MCP server display name for that database. If `DEFAULT_DATABASE` is not set, `DATABASE_URL` is the default when present; otherwise the first configured id in sorted order is used.
@@ -59,8 +58,8 @@ DATABASE_MAX_IDLE_CONNS=1
 Individual databases can override them:
 
 ```text
-DATABASE_TCM_MAX_OPEN_CONNS=10
-DATABASE_TCM_MAX_IDLE_CONNS=1
+DATABASE_APP_MAX_OPEN_CONNS=10
+DATABASE_APP_MAX_IDLE_CONNS=1
 ```
 
 Supported database drivers:

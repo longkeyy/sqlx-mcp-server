@@ -11,7 +11,7 @@ The SQLite driver is `modernc.org/sqlite`, so SQLite builds can run with `CGO_EN
 - Provides `query`, `execute`, `list_objects`, and `describe_object` tools.
 - Supports Streamable HTTP at `/mcp`.
 - Supports SSE at `/sse` plus `/message`.
-- Supports multiple databases in one process with routes such as `/db/tcm/mcp`.
+- Supports multiple databases in one process with routes such as `/db/reporting/mcp`.
 - Docker-friendly environment variable configuration.
 - Per-database `database/sql` connection pools.
 - Pure-Go SQLite support for CGO-free builds.
@@ -54,7 +54,13 @@ By default, `docker-compose.yml` maps:
 http://localhost:8088/mcp
 ```
 
-The compose file uses `DATABASE_URL=sqlite:///app/data/${DB_FILENAME:-tcm_unified.db}` and mounts `./data` to `/app/data`.
+The compose file uses `DATABASE_URL=sqlite://:memory:` by default and mounts `./data` to `/app/data` for local file-backed SQLite overrides.
+
+For a local SQLite file, use an ignored `docker-compose.override.yml` or export `DATABASE_URL` before starting Compose:
+
+```bash
+DATABASE_URL=sqlite:///app/data/example.db docker compose up -d --build
+```
 
 ## Configuration
 
@@ -99,35 +105,34 @@ MySQL-compatible databases reuse the MySQL Go driver internally while keeping th
 Use `DATABASE_{ID}_URL` variables to expose multiple databases from one process:
 
 ```env
-DATABASE_TCM_URL=sqlite:///app/data/tcm_unified.db
-DATABASE_HERB_URL=sqlite:///app/data/herb.db
+DATABASE_APP_URL=sqlite:///app/data/app.db
 DATABASE_REPORTING_URL=postgres://user:pass@host:5432/reporting
 DATABASE_EVENTS_URL=clickhouse://user:pass@clickhouse:9000/events
 DATABASE_OB_URL=oceanbase://user:pass@oceanbase:3306/app
 DATABASE_ROACH_URL=cockroach://user:pass@roach:26257/app
-DEFAULT_DATABASE=TCM
+DEFAULT_DATABASE=APP
 ```
 
-The `{ID}` part becomes the lowercase route id. For example, `DATABASE_TCM_URL` becomes `tcm`.
+The `{ID}` part becomes the lowercase route id. For example, `DATABASE_REPORTING_URL` becomes `reporting`.
 
 Routes:
 
 ```text
 /mcp                    -> default database, Streamable HTTP
-/db/tcm/mcp             -> tcm database, Streamable HTTP
-/db/herb/mcp            -> herb database, Streamable HTTP
+/db/app/mcp             -> app database, Streamable HTTP
+/db/reporting/mcp       -> reporting database, Streamable HTTP
 
 /sse                    -> default database, SSE stream
 /message                -> default database, SSE message endpoint
-/db/tcm/sse             -> tcm database, SSE stream
-/db/tcm/message         -> tcm database, SSE message endpoint
+/db/app/sse             -> app database, SSE stream
+/db/app/message         -> app database, SSE message endpoint
 ```
 
 Optional display names:
 
 ```env
-DATABASE_TCM_NAME=tcm-db
-DATABASE_HERB_NAME=herb-db
+DATABASE_APP_NAME=app-db
+DATABASE_REPORTING_NAME=reporting-db
 ```
 
 If `DEFAULT_DATABASE` is not set, `DATABASE_URL` is used as the default when present. Otherwise, the first configured database id in sorted order is used.
@@ -146,8 +151,8 @@ DATABASE_MAX_IDLE_CONNS=1
 Per-database overrides:
 
 ```env
-DATABASE_TCM_MAX_OPEN_CONNS=10
-DATABASE_TCM_MAX_IDLE_CONNS=1
+DATABASE_APP_MAX_OPEN_CONNS=10
+DATABASE_APP_MAX_IDLE_CONNS=1
 ```
 
 The default idle connection count is intentionally low because MCP SQL access is often low-frequency.
