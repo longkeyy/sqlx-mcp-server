@@ -16,6 +16,7 @@ dist/
 .env
 docker-compose.override.yml
 /deploy.sh
+/dify/
 
 # OS files
 .DS_Store
