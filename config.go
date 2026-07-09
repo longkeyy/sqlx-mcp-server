@@ -224,9 +224,12 @@ func parseDatabaseConfigs(legacyDSN, legacyName string, env map[string]string) (
 		return nil, "", fmt.Errorf("DSN is required. Use --dsn, DATABASE_URL, or DATABASE_{ID}_URL environment variables.\n" +
 			"Supported formats:\n" +
 			"  mysql://user:pass@host:3306/dbname\n" +
+			"  tidb://user:pass@host:4000/dbname\n" +
+			"  doris://user:pass@host:9030/dbname\n" +
 			"  postgres://user:pass@host:5432/dbname\n" +
 			"  sqlite:///path/to/db.sqlite\n" +
-			"  sqlserver://user:pass@host:1433/dbname")
+			"  sqlserver://user:pass@host:1433/dbname\n" +
+			"  clickhouse://user:pass@host:9000/dbname")
 	}
 
 	defaultID := ""
@@ -340,7 +343,7 @@ func MaskDSN(dsn string) string {
 	}
 
 	// Try to mask password in URL format
-	for _, prefix := range []string{"mysql://", "postgres://", "postgresql://", "sqlserver://"} {
+	for _, prefix := range []string{"mysql://", "tidb://", "doris://", "postgres://", "postgresql://", "sqlserver://", "clickhouse://"} {
 		if strings.HasPrefix(dsn, prefix) {
 			parts := strings.SplitN(dsn[len(prefix):], "@", 2)
 			if len(parts) == 2 {

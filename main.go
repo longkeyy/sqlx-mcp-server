@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 
+	_ "github.com/ClickHouse/clickhouse-go/v2"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"

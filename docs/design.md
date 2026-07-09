@@ -34,6 +34,7 @@ Multiple databases can be configured with Docker-friendly environment variables:
 DATABASE_TCM_URL=sqlite:///app/data/tcm_unified.db
 DATABASE_HERB_URL=sqlite:///app/data/herb.db
 DATABASE_REPORTING_URL=postgres://user:pass@host:5432/reporting
+DATABASE_EVENTS_URL=clickhouse://user:pass@clickhouse:9000/events
 DEFAULT_DATABASE=TCM
 ```
 
@@ -63,9 +64,12 @@ DATABASE_TCM_MAX_IDLE_CONNS=1
 Supported database drivers:
 
 - MySQL
+- TiDB through the MySQL wire protocol.
+- Apache Doris through the MySQL wire protocol.
 - PostgreSQL
 - SQLite through the pure-Go `modernc.org/sqlite` driver, with `CGO_ENABLED=0` builds supported for cross-compilation.
 - SQL Server
+- ClickHouse through the official ClickHouse Go driver.
 
 Supported MCP transports:
 
