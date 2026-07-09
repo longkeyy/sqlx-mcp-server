@@ -1,13 +1,13 @@
 # SQL MCP Server
 
-A Model Context Protocol (MCP) server that exposes SQL databases as MCP tools. It supports MySQL, PostgreSQL, SQLite, and SQL Server, with Streamable HTTP, SSE, and stdio transports.
+A Model Context Protocol (MCP) server that exposes SQL databases as MCP tools. It supports MySQL-compatible, PostgreSQL-compatible, SQLite, SQL Server, and ClickHouse databases, with Streamable HTTP, SSE, and stdio transports.
 
 The SQLite driver is `modernc.org/sqlite`, so SQLite builds can run with `CGO_ENABLED=0` for simpler cross-compilation and container builds.
 
 ## Features
 
 - Query SQL databases through MCP tools.
-- Supports MySQL, PostgreSQL, SQLite, and SQL Server DSNs.
+- Supports MySQL, MariaDB, Percona, TiDB, OceanBase, Apache Doris, StarRocks, PostgreSQL, CockroachDB, Greenplum, openGauss, MogDB, SQLite, SQL Server, and ClickHouse DSNs.
 - Provides `query`, `execute`, `list_objects`, and `describe_object` tools.
 - Supports Streamable HTTP at `/mcp`.
 - Supports SSE at `/sse` plus `/message`.
@@ -75,11 +75,24 @@ CLI flags have priority over environment variables.
 
 ```text
 mysql://user:pass@host:3306/dbname
+mariadb://user:pass@host:3306/dbname
+percona://user:pass@host:3306/dbname
+tidb://user:pass@host:4000/dbname
+oceanbase://user:pass@host:3306/dbname
+doris://user:pass@host:9030/dbname
+starrocks://user:pass@host:9030/dbname
 postgres://user:pass@host:5432/dbname
 postgresql://user:pass@host:5432/dbname
+cockroach://user:pass@host:26257/dbname
+greenplum://user:pass@host:5432/dbname
+opengauss://user:pass@host:5432/dbname
+mogdb://user:pass@host:5432/dbname
 sqlite:///path/to/db.sqlite
 sqlserver://user:pass@host:1433/dbname
+clickhouse://user:pass@host:9000/dbname
 ```
+
+MySQL-compatible databases reuse the MySQL Go driver internally while keeping their own dialect names in tool descriptions and results. PostgreSQL-compatible databases reuse the PostgreSQL driver in the same way. ClickHouse uses the official ClickHouse Go driver.
 
 ## Multi-Database Routing
 
@@ -89,6 +102,9 @@ Use `DATABASE_{ID}_URL` variables to expose multiple databases from one process:
 DATABASE_TCM_URL=sqlite:///app/data/tcm_unified.db
 DATABASE_HERB_URL=sqlite:///app/data/herb.db
 DATABASE_REPORTING_URL=postgres://user:pass@host:5432/reporting
+DATABASE_EVENTS_URL=clickhouse://user:pass@clickhouse:9000/events
+DATABASE_OB_URL=oceanbase://user:pass@oceanbase:3306/app
+DATABASE_ROACH_URL=cockroach://user:pass@roach:26257/app
 DEFAULT_DATABASE=TCM
 ```
 

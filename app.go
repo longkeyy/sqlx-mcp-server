@@ -43,7 +43,7 @@ func newAppServer(config DatabaseConfig) (*appServer, error) {
 }
 
 func openConnectionPool(dsnConfig *DSNConfig, config DatabaseConfig) (*sql.DB, error) {
-	db, err := sql.Open(string(dsnConfig.Driver), dsnConfig.ConnStr)
+	db, err := sql.Open(dsnConfig.SQLDriver, dsnConfig.ConnStr)
 	if err != nil {
 		return nil, err
 	}
