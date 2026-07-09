@@ -65,10 +65,10 @@ endef
 # Go development build command
 define build_go_dev
 	$(if $(shell if [ -d cmd ] && [ $$(find cmd -mindepth 1 -maxdepth 1 -type d | wc -l) -gt 0 ]; then echo "multi"; fi), \
-		go build -o $(2) -ldflags "-X main.Version=$(VERSION)" cmd/$(1)/*, \
+		CGO_ENABLED=0 go build -o $(2) -ldflags "-X main.Version=$(VERSION)" cmd/$(1)/*, \
 		$(if $(shell [ -d cmd ] && [ -f cmd/main.go ] && echo "single"), \
-			go build -o $(2) -ldflags "-X main.Version=$(VERSION)" cmd/*, \
-			go build -o $(2) -ldflags "-X main.Version=$(VERSION)" . \
+			CGO_ENABLED=0 go build -o $(2) -ldflags "-X main.Version=$(VERSION)" cmd/*, \
+			CGO_ENABLED=0 go build -o $(2) -ldflags "-X main.Version=$(VERSION)" . \
 		) \
 	)
 endef

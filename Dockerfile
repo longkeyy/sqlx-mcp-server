@@ -31,7 +31,7 @@ RUN mkdir -p /app/data
 EXPOSE 8088
 
 ENV DATABASE_URL=sqlite://:memory:
-ENV DB_NAME=sql-mcp
+ENV INSTANCE_NAME=sql-mcp
 ENV SERVER_MODE=http
 ENV SERVER_PORT=8088
 

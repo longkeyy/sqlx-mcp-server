@@ -1,11 +1,10 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
-	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
@@ -13,11 +12,6 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	_ "github.com/microsoft/go-mssqldb"
 	_ "modernc.org/sqlite"
-)
-
-var (
-	db       *sql.DB
-	dbDriver DriverType
 )
 
 func init() {
@@ -35,92 +29,43 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Parse DSN
-	dsnConfig, err := ParseDSN(config.DSN)
+	apps, err := buildAppServers(config.Databases)
 	if err != nil {
-		log.Fatalf("Invalid DSN: %v", err)
+		log.Fatal(err)
 	}
-
-	// Initialize database connection pool
-	if err := initConnectionPool(dsnConfig); err != nil {
-		log.Fatalf("Database connection failed: %v", err)
-	}
-	defer db.Close()
-
-	// Set global driver type
-	dbDriver = dsnConfig.Driver
-
-	// Build instance name
-	instanceName := "sql-mcp-server"
-	if config.Name != "" {
-		instanceName = config.Name
-	}
-	instanceName += " 🚀"
-
-	s := server.NewMCPServer(
-		instanceName,
-		"1.0.0",
-	)
-
-	// Build dynamic tool descriptions based on current database
-	dbName := getCurrentDatabase()
-	dbVersion := getDBVersion()
-	dialectName := getSQLDialectName()
-
-	queryDesc := fmt.Sprintf("Execute a read-oriented SQL query (SELECT, WITH, EXPLAIN, SHOW, DESCRIBE). Results are returned as compact JSON with columns plus row arrays. Current database: %s (%s %s).", dbName, dialectName, dbVersion)
-	executeDesc := fmt.Sprintf("Execute a write operation: DML (INSERT/UPDATE/DELETE), DDL (CREATE/ALTER/DROP), or call a stored procedure. Current database: %s (%s %s).", dbName, dialectName, dbVersion)
-	listObjectsDesc := fmt.Sprintf("List database objects (tables, views, procedures, functions) as JSON object records. Current database: %s (%s %s).", dbName, dialectName, dbVersion)
-	describeDesc := fmt.Sprintf("Describe a database object (table, view, procedure, function) as JSON metadata. Current database: %s (%s %s).", dbName, dialectName, dbVersion)
-
-	// Register tools
-	s.AddTool(queryTool(queryDesc), queryToolHandler)
-	s.AddTool(executeTool(executeDesc), executeToolHandler)
-	s.AddTool(listObjectsTool(listObjectsDesc), listObjectsToolHandler)
-	s.AddTool(describeObjectTool(describeDesc), describeObjectToolHandler)
+	defer closeAppServers(apps)
 
 	addr := fmt.Sprintf(":%d", config.Port)
-
-	log.Printf("Starting %s (%s) in %s mode on %s", instanceName, dsnConfig.Driver, config.ServerMode, addr)
+	log.Printf("Starting %d database instance(s) in %s mode on %s; default=%s", len(apps), config.ServerMode, addr, config.DefaultDatabase)
 
 	switch config.ServerMode {
 	case "stdio":
-		if err := server.ServeStdio(s); err != nil {
+		app, err := getDefaultApp(apps, config.DefaultDatabase)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := server.ServeStdio(app.mcpServer); err != nil {
 			log.Printf("Stdio server error: %v\n", err)
 		}
 	case "sse":
-		sse := server.NewSSEServer(s)
-		log.Printf("SSE server listening on %s/sse", addr)
-		if err := sse.Start(addr); err != nil {
+		mux := http.NewServeMux()
+		if err := mountSSEServers(mux, apps, config.DefaultDatabase); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("SSE default endpoint listening on %s/sse; database endpoints on %s/db/{id}/sse", addr, addr)
+		if err := http.ListenAndServe(addr, mux); err != nil {
 			log.Fatalf("Server error: %v", err)
 		}
 	case "http":
-		httpServer := server.NewStreamableHTTPServer(s)
-		log.Printf("StreamableHTTP server listening on %s/mcp", addr)
-		if err := httpServer.Start(addr); err != nil {
+		mux := http.NewServeMux()
+		if err := mountHTTPServers(mux, apps, config.DefaultDatabase); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("StreamableHTTP default endpoint listening on %s/mcp; database endpoints on %s/db/{id}/mcp", addr, addr)
+		if err := http.ListenAndServe(addr, mux); err != nil {
 			log.Fatalf("Server error: %v", err)
 		}
 	default:
 		log.Fatalf("Unknown server mode: %s", config.ServerMode)
 	}
-}
-
-func initConnectionPool(dsnConfig *DSNConfig) error {
-	var err error
-	db, err = sql.Open(string(dsnConfig.Driver), dsnConfig.ConnStr)
-	if err != nil {
-		return err
-	}
-
-	// Configure connection pool
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
-	db.SetConnMaxIdleTime(2 * time.Minute)
-
-	if err = db.Ping(); err != nil {
-		return err
-	}
-
-	log.Printf("Successfully connected to database (%s): %s", dsnConfig.Driver, MaskDSN(dsnConfig.RawDSN))
-	return nil
 }

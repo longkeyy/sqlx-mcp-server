@@ -36,27 +36,24 @@ func TestValidateReadQuery(t *testing.T) {
 
 func TestSQLiteToolsReturnStructuredJSON(t *testing.T) {
 	ctx := context.Background()
-	t.Cleanup(resetTestDB)
 
-	dsnConfig, err := ParseDSN("sqlite://:memory:")
+	app, err := newAppServer(DatabaseConfig{
+		ID:   "test",
+		Name: "test-db",
+		DSN:  sqliteFileDSN(t, "structured"),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := initConnectionPool(dsnConfig); err != nil {
-		t.Fatal(err)
-	}
-	dbDriver = dsnConfig.Driver
-	t.Cleanup(func() {
-		_ = db.Close()
-	})
+	t.Cleanup(app.close)
 
-	if _, err := db.ExecContext(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
+	if _, err := app.db.ExecContext(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
 INSERT INTO users (name) VALUES ('alice'), ('bob');
 CREATE VIEW user_names AS SELECT name FROM users;`); err != nil {
 		t.Fatal(err)
 	}
 
-	queryResult, err := queryToolHandler(ctx, newToolRequest(map[string]interface{}{
+	queryResult, err := app.queryToolHandler(ctx, newToolRequest(map[string]interface{}{
 		"sql":      "SELECT id, name FROM users ORDER BY id",
 		"max_rows": float64(1),
 	}))
@@ -72,7 +69,7 @@ CREATE VIEW user_names AS SELECT name FROM users;`); err != nil {
 		t.Fatalf("expected first column id, got %q", got)
 	}
 
-	listResult, err := listObjectsToolHandler(ctx, newToolRequest(nil))
+	listResult, err := app.listObjectsToolHandler(ctx, newToolRequest(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +79,7 @@ CREATE VIEW user_names AS SELECT name FROM users;`); err != nil {
 		t.Fatalf("expected table and view, got %+v", listResp.Objects)
 	}
 
-	describeResult, err := describeObjectToolHandler(ctx, newToolRequest(map[string]interface{}{
+	describeResult, err := app.describeObjectToolHandler(ctx, newToolRequest(map[string]interface{}{
 		"object_type": "table",
 		"object_name": "users",
 	}))
@@ -96,6 +93,47 @@ CREATE VIEW user_names AS SELECT name FROM users;`); err != nil {
 	}
 	if len(descResp.Columns) != 2 {
 		t.Fatalf("expected two columns, got %+v", descResp.Columns)
+	}
+}
+
+func TestSQLiteToolHandlersUseInstanceConnection(t *testing.T) {
+	ctx := context.Background()
+	appA, err := newAppServer(DatabaseConfig{ID: "a", Name: "a", DSN: sqliteFileDSN(t, "a")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(appA.close)
+	appB, err := newAppServer(DatabaseConfig{ID: "b", Name: "b", DSN: sqliteFileDSN(t, "b")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(appB.close)
+
+	if _, err := appA.db.ExecContext(ctx, `CREATE TABLE only_a (id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := appB.db.ExecContext(ctx, `CREATE TABLE only_b (id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+
+	resultA, err := appA.listObjectsToolHandler(ctx, newToolRequest(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listA listObjectsResponse
+	decodeToolJSON(t, resultA, &listA)
+	if !hasObject(listA.Objects, "only_a") || hasObject(listA.Objects, "only_b") {
+		t.Fatalf("expected appA to see only only_a, got %+v", listA.Objects)
+	}
+
+	resultB, err := appB.listObjectsToolHandler(ctx, newToolRequest(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listB listObjectsResponse
+	decodeToolJSON(t, resultB, &listB)
+	if !hasObject(listB.Objects, "only_b") || hasObject(listB.Objects, "only_a") {
+		t.Fatalf("expected appB to see only only_b, got %+v", listB.Objects)
 	}
 }
 
@@ -124,10 +162,16 @@ func decodeToolJSON(t *testing.T, result *mcp.CallToolResult, target interface{}
 	}
 }
 
-func resetTestDB() {
-	if db != nil {
-		_ = db.Close()
+func hasObject(objects []objectInfo, name string) bool {
+	for _, object := range objects {
+		if object.Name == name {
+			return true
+		}
 	}
-	db = nil
-	dbDriver = ""
+	return false
+}
+
+func sqliteFileDSN(t *testing.T, name string) string {
+	t.Helper()
+	return "sqlite://" + t.TempDir() + "/" + name + ".db"
 }

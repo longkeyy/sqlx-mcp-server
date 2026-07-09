@@ -106,7 +106,7 @@ func describeObjectTool(desc string) mcp.Tool {
 // Tool Handlers
 // ============================================================
 
-func queryToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (a *appServer) queryToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	sqlStmt, ok := request.GetArguments()["sql"].(string)
 	if !ok {
 		return nil, errors.New("invalid or missing 'sql' parameter")
@@ -120,7 +120,7 @@ func queryToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.Ca
 		maxRows = int(maxRowsParam)
 	}
 
-	rows, err := db.QueryContext(ctx, sqlStmt)
+	rows, err := a.db.QueryContext(ctx, sqlStmt)
 	if err != nil {
 		log.Printf("Query error: %v\n", err)
 		return nil, fmt.Errorf("query execution failed: %v", err)
@@ -133,17 +133,17 @@ func queryToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.Ca
 	}
 
 	results.MaxRows = maxRows
-	results.Dialect = getSQLDialectName()
+	results.Dialect = a.getSQLDialectName()
 	return newJSONToolResult(results)
 }
 
-func executeToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (a *appServer) executeToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	sqlStmt, ok := request.GetArguments()["sql"].(string)
 	if !ok {
 		return nil, errors.New("invalid or missing 'sql' parameter")
 	}
 
-	result, err := db.ExecContext(ctx, sqlStmt)
+	result, err := a.db.ExecContext(ctx, sqlStmt)
 	if err != nil {
 		log.Printf("Execute error: %v\n", err)
 		return nil, fmt.Errorf("execution failed: %v", err)
@@ -157,7 +157,7 @@ func executeToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 	return mcp.NewToolResultText("Operation successful."), nil
 }
 
-func listObjectsToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (a *appServer) listObjectsToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	objectType := "all"
 	if t, ok := request.GetArguments()["type"].(string); ok {
 		objectType = strings.ToLower(t)
@@ -179,13 +179,13 @@ func listObjectsToolHandler(ctx context.Context, request mcp.CallToolRequest) (*
 	}
 
 	// Get current database name
-	dbName := getCurrentDatabase()
+	dbName := a.getCurrentDatabase()
 
 	// Collect objects by type
-	tables := getObjectsByType(ctx, "table")
-	views := getObjectsByType(ctx, "view")
-	procedures := getObjectsByType(ctx, "procedure")
-	functions := getObjectsByType(ctx, "function")
+	tables := a.getObjectsByType(ctx, "table")
+	views := a.getObjectsByType(ctx, "view")
+	procedures := a.getObjectsByType(ctx, "procedure")
+	functions := a.getObjectsByType(ctx, "function")
 
 	// Apply regex filter if provided
 	if re != nil {
@@ -216,13 +216,13 @@ func listObjectsToolHandler(ctx context.Context, request mcp.CallToolRequest) (*
 
 	response := listObjectsResponse{
 		Database: dbName,
-		Dialect:  getSQLDialectName(),
+		Dialect:  a.getSQLDialectName(),
 		Objects:  objects,
 	}
 	return newJSONToolResult(response)
 }
 
-func describeObjectToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (a *appServer) describeObjectToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	objectName, ok := request.GetArguments()["object_name"].(string)
 	if !ok {
 		return nil, errors.New("invalid or missing 'object_name' parameter")
@@ -240,13 +240,13 @@ func describeObjectToolHandler(ctx context.Context, request mcp.CallToolRequest)
 
 		switch objectType {
 		case "table":
-			result, err = getTableDefinition(ctx, objectName)
+			result, err = a.getTableDefinition(ctx, objectName)
 		case "view":
-			result, err = getViewDefinition(ctx, objectName)
+			result, err = a.getViewDefinition(ctx, objectName)
 		case "procedure":
-			result, err = getProcedureDefinition(ctx, objectName)
+			result, err = a.getProcedureDefinition(ctx, objectName)
 		case "function":
-			result, err = getFunctionDefinition(ctx, objectName)
+			result, err = a.getFunctionDefinition(ctx, objectName)
 		default:
 			return nil, fmt.Errorf("unsupported object type: %s (use table, view, procedure, or function)", objectType)
 		}
@@ -267,13 +267,13 @@ func describeObjectToolHandler(ctx context.Context, request mcp.CallToolRequest)
 
 		switch objType {
 		case "table":
-			result, err = getTableDefinition(ctx, objectName)
+			result, err = a.getTableDefinition(ctx, objectName)
 		case "view":
-			result, err = getViewDefinition(ctx, objectName)
+			result, err = a.getViewDefinition(ctx, objectName)
 		case "procedure":
-			result, err = getProcedureDefinition(ctx, objectName)
+			result, err = a.getProcedureDefinition(ctx, objectName)
 		case "function":
-			result, err = getFunctionDefinition(ctx, objectName)
+			result, err = a.getFunctionDefinition(ctx, objectName)
 		}
 
 		if err == nil {
@@ -289,7 +289,7 @@ func describeObjectToolHandler(ctx context.Context, request mcp.CallToolRequest)
 		return newJSONToolResult(results[0])
 	}
 	return newJSONToolResult(map[string]interface{}{
-		"dialect": getSQLDialectName(),
+		"dialect": a.getSQLDialectName(),
 		"matches": results,
 	})
 }
@@ -298,60 +298,60 @@ func describeObjectToolHandler(ctx context.Context, request mcp.CallToolRequest)
 // Helper Functions for Object Listing
 // ============================================================
 
-func getObjectsByType(ctx context.Context, objectType string) []objectInfo {
+func (a *appServer) getObjectsByType(ctx context.Context, objectType string) []objectInfo {
 	var objects []objectInfo
 
-	switch dbDriver {
+	switch a.driver {
 	case DriverMySQL:
 		switch objectType {
 		case "table":
-			objects = queryObjects(ctx, objectType, `SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME`)
+			objects = a.queryObjects(ctx, objectType, `SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME`)
 		case "view":
-			objects = queryObjects(ctx, objectType, `SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.VIEWS WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME`)
+			objects = a.queryObjects(ctx, objectType, `SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.VIEWS WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME`)
 		case "procedure":
-			objects = queryObjects(ctx, objectType, `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_TYPE = 'PROCEDURE' ORDER BY ROUTINE_NAME`)
+			objects = a.queryObjects(ctx, objectType, `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_TYPE = 'PROCEDURE' ORDER BY ROUTINE_NAME`)
 		case "function":
-			objects = queryObjects(ctx, objectType, `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_TYPE = 'FUNCTION' ORDER BY ROUTINE_NAME`)
+			objects = a.queryObjects(ctx, objectType, `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_TYPE = 'FUNCTION' ORDER BY ROUTINE_NAME`)
 		}
 
 	case DriverPostgres:
 		switch objectType {
 		case "table":
-			objects = queryObjects(ctx, objectType, `SELECT schemaname, tablename FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, tablename`)
+			objects = a.queryObjects(ctx, objectType, `SELECT schemaname, tablename FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, tablename`)
 		case "view":
-			objects = queryObjects(ctx, objectType, `SELECT schemaname, viewname FROM pg_catalog.pg_views WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, viewname`)
+			objects = a.queryObjects(ctx, objectType, `SELECT schemaname, viewname FROM pg_catalog.pg_views WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, viewname`)
 		case "procedure":
-			objects = queryObjects(ctx, objectType, `SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.prokind = 'p' ORDER BY n.nspname, p.proname`)
+			objects = a.queryObjects(ctx, objectType, `SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.prokind = 'p' ORDER BY n.nspname, p.proname`)
 		case "function":
-			objects = queryObjects(ctx, objectType, `SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.prokind IN ('f', 'a') ORDER BY n.nspname, p.proname`)
+			objects = a.queryObjects(ctx, objectType, `SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.prokind IN ('f', 'a') ORDER BY n.nspname, p.proname`)
 		}
 
 	case DriverSQLite:
 		switch objectType {
 		case "table":
-			objects = queryObjects(ctx, objectType, `SELECT '', name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+			objects = a.queryObjects(ctx, objectType, `SELECT '', name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
 		case "view":
-			objects = queryObjects(ctx, objectType, `SELECT '', name FROM sqlite_master WHERE type='view' ORDER BY name`)
+			objects = a.queryObjects(ctx, objectType, `SELECT '', name FROM sqlite_master WHERE type='view' ORDER BY name`)
 		}
 
 	case DriverMSSQL:
 		switch objectType {
 		case "table":
-			objects = queryObjects(ctx, objectType, `SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_SCHEMA, TABLE_NAME`)
+			objects = a.queryObjects(ctx, objectType, `SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_SCHEMA, TABLE_NAME`)
 		case "view":
-			objects = queryObjects(ctx, objectType, `SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS ORDER BY TABLE_SCHEMA, TABLE_NAME`)
+			objects = a.queryObjects(ctx, objectType, `SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS ORDER BY TABLE_SCHEMA, TABLE_NAME`)
 		case "procedure":
-			objects = queryObjects(ctx, objectType, `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'PROCEDURE' ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME`)
+			objects = a.queryObjects(ctx, objectType, `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'PROCEDURE' ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME`)
 		case "function":
-			objects = queryObjects(ctx, objectType, `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'FUNCTION' ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME`)
+			objects = a.queryObjects(ctx, objectType, `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'FUNCTION' ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME`)
 		}
 	}
 
 	return objects
 }
 
-func queryObjects(ctx context.Context, objectType, query string, args ...interface{}) []objectInfo {
-	rows, err := db.QueryContext(ctx, query, args...)
+func (a *appServer) queryObjects(ctx context.Context, objectType, query string, args ...interface{}) []objectInfo {
+	rows, err := a.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil
 	}
@@ -378,23 +378,23 @@ func filterObjectsByRegex(items []objectInfo, re *regexp.Regexp) []objectInfo {
 	return filtered
 }
 
-func getCurrentDatabase() string {
+func (a *appServer) getCurrentDatabase() string {
 	var dbName string
-	switch dbDriver {
+	switch a.driver {
 	case DriverMySQL:
-		err := db.QueryRow(`SELECT DATABASE()`).Scan(&dbName)
+		err := a.db.QueryRow(`SELECT DATABASE()`).Scan(&dbName)
 		if err != nil {
 			dbName = "unknown"
 		}
 	case DriverPostgres:
-		err := db.QueryRow(`SELECT current_database()`).Scan(&dbName)
+		err := a.db.QueryRow(`SELECT current_database()`).Scan(&dbName)
 		if err != nil {
 			dbName = "unknown"
 		}
 	case DriverSQLite:
 		dbName = "main"
 	case DriverMSSQL:
-		err := db.QueryRow(`SELECT DB_NAME()`).Scan(&dbName)
+		err := a.db.QueryRow(`SELECT DB_NAME()`).Scan(&dbName)
 		if err != nil {
 			dbName = "unknown"
 		}
@@ -404,19 +404,19 @@ func getCurrentDatabase() string {
 	return dbName
 }
 
-func getDBVersion() string {
+func (a *appServer) getDBVersion() string {
 	var version string
 	var err error
 
-	switch dbDriver {
+	switch a.driver {
 	case DriverMySQL:
-		err = db.QueryRow(`SELECT VERSION()`).Scan(&version)
+		err = a.db.QueryRow(`SELECT VERSION()`).Scan(&version)
 	case DriverPostgres:
-		err = db.QueryRow(`SELECT VERSION()`).Scan(&version)
+		err = a.db.QueryRow(`SELECT VERSION()`).Scan(&version)
 	case DriverSQLite:
-		err = db.QueryRow(`SELECT SQLITE_VERSION()`).Scan(&version)
+		err = a.db.QueryRow(`SELECT SQLITE_VERSION()`).Scan(&version)
 	case DriverMSSQL:
-		err = db.QueryRow(`SELECT @@VERSION`).Scan(&version)
+		err = a.db.QueryRow(`SELECT @@VERSION`).Scan(&version)
 	default:
 		return "Unknown"
 	}
@@ -433,8 +433,8 @@ func getDBVersion() string {
 	return version
 }
 
-func getSQLDialectName() string {
-	switch dbDriver {
+func (a *appServer) getSQLDialectName() string {
+	switch a.driver {
 	case DriverMySQL:
 		return "MySQL"
 	case DriverPostgres:
@@ -453,16 +453,16 @@ func getSQLDialectName() string {
 // ============================================================
 
 // getTableDefinition returns table structure (columns, types, constraints)
-func getTableDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
+func (a *appServer) getTableDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
 	obj := parseQualifiedObjectName(objectName)
 	response := objectDescriptionResponse{
 		Object:  objectInfo{Type: "table", Schema: obj.Schema, Name: obj.Name},
-		Dialect: getSQLDialectName(),
+		Dialect: a.getSQLDialectName(),
 	}
 
-	switch dbDriver {
+	switch a.driver {
 	case DriverMySQL:
-		rows, err := db.QueryContext(ctx, `
+		rows, err := a.db.QueryContext(ctx, `
 			SELECT COLUMN_NAME AS name, DATA_TYPE AS type, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS default_value, COLUMN_COMMENT AS comment
 			FROM information_schema.COLUMNS
 			WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ?
@@ -478,7 +478,7 @@ func getTableDefinition(ctx context.Context, objectName string) (objectDescripti
 		response.Columns = columns
 
 	case DriverPostgres:
-		rows, err := db.QueryContext(ctx, `
+		rows, err := a.db.QueryContext(ctx, `
 			SELECT column_name AS name, data_type AS type, is_nullable AS nullable, column_default AS default_value
 			FROM information_schema.columns
 			WHERE table_schema = COALESCE(NULLIF($1, ''), 'public') AND table_name = $2
@@ -494,7 +494,7 @@ func getTableDefinition(ctx context.Context, objectName string) (objectDescripti
 		response.Columns = columns
 
 	case DriverSQLite:
-		rows, err := db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, quoteSQLiteIdentifier(obj.Name)))
+		rows, err := a.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, quoteSQLiteIdentifier(obj.Name)))
 		if err != nil {
 			return response, fmt.Errorf("failed to get table definition: %v", err)
 		}
@@ -506,7 +506,7 @@ func getTableDefinition(ctx context.Context, objectName string) (objectDescripti
 		response.Columns = columns
 
 	case DriverMSSQL:
-		rows, err := db.QueryContext(ctx, `
+		rows, err := a.db.QueryContext(ctx, `
 			SELECT COLUMN_NAME AS name, DATA_TYPE AS type, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS default_value
 			FROM INFORMATION_SCHEMA.COLUMNS
 			WHERE TABLE_SCHEMA = COALESCE(NULLIF(@p1, ''), SCHEMA_NAME()) AND TABLE_NAME = @p2
@@ -526,30 +526,30 @@ func getTableDefinition(ctx context.Context, objectName string) (objectDescripti
 		return response, fmt.Errorf("table '%s' not found", objectName)
 	}
 
-	response.Indexes = getIndexInfo(ctx, obj)
+	response.Indexes = a.getIndexInfo(ctx, obj)
 	return response, nil
 }
 
-func getViewDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
+func (a *appServer) getViewDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
 	obj := parseQualifiedObjectName(objectName)
 	response := objectDescriptionResponse{
 		Object:  objectInfo{Type: "view", Schema: obj.Schema, Name: obj.Name},
-		Dialect: getSQLDialectName(),
+		Dialect: a.getSQLDialectName(),
 	}
 	var row *sql.Row
 
-	switch dbDriver {
+	switch a.driver {
 	case DriverMySQL:
-		row = db.QueryRowContext(ctx, `SELECT VIEW_DEFINITION FROM information_schema.VIEWS WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ?`, obj.Schema, obj.Name)
+		row = a.db.QueryRowContext(ctx, `SELECT VIEW_DEFINITION FROM information_schema.VIEWS WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ?`, obj.Schema, obj.Name)
 
 	case DriverPostgres:
-		row = db.QueryRowContext(ctx, `SELECT definition FROM pg_views WHERE schemaname = COALESCE(NULLIF($1, ''), 'public') AND viewname = $2`, obj.Schema, obj.Name)
+		row = a.db.QueryRowContext(ctx, `SELECT definition FROM pg_views WHERE schemaname = COALESCE(NULLIF($1, ''), 'public') AND viewname = $2`, obj.Schema, obj.Name)
 
 	case DriverSQLite:
-		row = db.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'view' AND name = ?`, obj.Name)
+		row = a.db.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'view' AND name = ?`, obj.Name)
 
 	case DriverMSSQL:
-		row = db.QueryRowContext(ctx, `SELECT VIEW_DEFINITION FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = COALESCE(NULLIF(@p1, ''), SCHEMA_NAME()) AND TABLE_NAME = @p2`, obj.Schema, obj.Name)
+		row = a.db.QueryRowContext(ctx, `SELECT VIEW_DEFINITION FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = COALESCE(NULLIF(@p1, ''), SCHEMA_NAME()) AND TABLE_NAME = @p2`, obj.Schema, obj.Name)
 	}
 
 	err := row.Scan(&response.Definition)
@@ -562,20 +562,20 @@ func getViewDefinition(ctx context.Context, objectName string) (objectDescriptio
 	return response, nil
 }
 
-func getProcedureDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
+func (a *appServer) getProcedureDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
 	obj := parseQualifiedObjectName(objectName)
 	response := objectDescriptionResponse{
 		Object:  objectInfo{Type: "procedure", Schema: obj.Schema, Name: obj.Name},
-		Dialect: getSQLDialectName(),
+		Dialect: a.getSQLDialectName(),
 	}
 	var row *sql.Row
 
-	switch dbDriver {
+	switch a.driver {
 	case DriverMySQL:
-		row = db.QueryRowContext(ctx, `SELECT ROUTINE_DEFINITION FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND ROUTINE_NAME = ? AND ROUTINE_TYPE = 'PROCEDURE'`, obj.Schema, obj.Name)
+		row = a.db.QueryRowContext(ctx, `SELECT ROUTINE_DEFINITION FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND ROUTINE_NAME = ? AND ROUTINE_TYPE = 'PROCEDURE'`, obj.Schema, obj.Name)
 
 	case DriverPostgres:
-		row = db.QueryRowContext(ctx, `
+		row = a.db.QueryRowContext(ctx, `
 			SELECT pg_get_functiondef(p.oid)
 			FROM pg_proc p
 			JOIN pg_namespace n ON p.pronamespace = n.oid
@@ -585,7 +585,7 @@ func getProcedureDefinition(ctx context.Context, objectName string) (objectDescr
 		return response, errors.New("SQLite does not support stored procedures")
 
 	case DriverMSSQL:
-		row = db.QueryRowContext(ctx, `SELECT OBJECT_DEFINITION(OBJECT_ID(@p1))`, sqlServerQualifiedName(obj))
+		row = a.db.QueryRowContext(ctx, `SELECT OBJECT_DEFINITION(OBJECT_ID(@p1))`, sqlServerQualifiedName(obj))
 	}
 
 	err := row.Scan(&response.Definition)
@@ -598,20 +598,20 @@ func getProcedureDefinition(ctx context.Context, objectName string) (objectDescr
 	return response, nil
 }
 
-func getFunctionDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
+func (a *appServer) getFunctionDefinition(ctx context.Context, objectName string) (objectDescriptionResponse, error) {
 	obj := parseQualifiedObjectName(objectName)
 	response := objectDescriptionResponse{
 		Object:  objectInfo{Type: "function", Schema: obj.Schema, Name: obj.Name},
-		Dialect: getSQLDialectName(),
+		Dialect: a.getSQLDialectName(),
 	}
 	var row *sql.Row
 
-	switch dbDriver {
+	switch a.driver {
 	case DriverMySQL:
-		row = db.QueryRowContext(ctx, `SELECT ROUTINE_DEFINITION FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND ROUTINE_NAME = ? AND ROUTINE_TYPE = 'FUNCTION'`, obj.Schema, obj.Name)
+		row = a.db.QueryRowContext(ctx, `SELECT ROUTINE_DEFINITION FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND ROUTINE_NAME = ? AND ROUTINE_TYPE = 'FUNCTION'`, obj.Schema, obj.Name)
 
 	case DriverPostgres:
-		row = db.QueryRowContext(ctx, `
+		row = a.db.QueryRowContext(ctx, `
 			SELECT pg_get_functiondef(p.oid)
 			FROM pg_proc p
 			JOIN pg_namespace n ON p.pronamespace = n.oid
@@ -621,7 +621,7 @@ func getFunctionDefinition(ctx context.Context, objectName string) (objectDescri
 		return response, errors.New("SQLite does not support user-defined functions")
 
 	case DriverMSSQL:
-		row = db.QueryRowContext(ctx, `SELECT OBJECT_DEFINITION(OBJECT_ID(@p1))`, sqlServerQualifiedName(obj))
+		row = a.db.QueryRowContext(ctx, `SELECT OBJECT_DEFINITION(OBJECT_ID(@p1))`, sqlServerQualifiedName(obj))
 	}
 
 	err := row.Scan(&response.Definition)
@@ -634,22 +634,22 @@ func getFunctionDefinition(ctx context.Context, objectName string) (objectDescri
 	return response, nil
 }
 
-func getIndexInfo(ctx context.Context, obj qualifiedObjectName) []map[string]interface{} {
+func (a *appServer) getIndexInfo(ctx context.Context, obj qualifiedObjectName) []map[string]interface{} {
 	var rows *sql.Rows
 	var err error
 
-	switch dbDriver {
+	switch a.driver {
 	case DriverMySQL:
-		rows, err = db.QueryContext(ctx, `SELECT INDEX_NAME AS name, COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique, SEQ_IN_INDEX AS seq FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX`, obj.Schema, obj.Name)
+		rows, err = a.db.QueryContext(ctx, `SELECT INDEX_NAME AS name, COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique, SEQ_IN_INDEX AS seq FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX`, obj.Schema, obj.Name)
 
 	case DriverPostgres:
-		rows, err = db.QueryContext(ctx, `SELECT indexname AS name, indexdef AS definition FROM pg_indexes WHERE schemaname = COALESCE(NULLIF($1, ''), 'public') AND tablename = $2 ORDER BY indexname`, obj.Schema, obj.Name)
+		rows, err = a.db.QueryContext(ctx, `SELECT indexname AS name, indexdef AS definition FROM pg_indexes WHERE schemaname = COALESCE(NULLIF($1, ''), 'public') AND tablename = $2 ORDER BY indexname`, obj.Schema, obj.Name)
 
 	case DriverSQLite:
-		rows, err = db.QueryContext(ctx, fmt.Sprintf(`PRAGMA index_list(%s)`, quoteSQLiteIdentifier(obj.Name)))
+		rows, err = a.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA index_list(%s)`, quoteSQLiteIdentifier(obj.Name)))
 
 	case DriverMSSQL:
-		rows, err = db.QueryContext(ctx, `SELECT i.name AS name, c.name AS column_name FROM sys.indexes i JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id WHERE i.object_id = OBJECT_ID(@p1) ORDER BY i.name, ic.key_ordinal`, sqlServerQualifiedName(obj))
+		rows, err = a.db.QueryContext(ctx, `SELECT i.name AS name, c.name AS column_name FROM sys.indexes i JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id WHERE i.object_id = OBJECT_ID(@p1) ORDER BY i.name, ic.key_ordinal`, sqlServerQualifiedName(obj))
 	}
 
 	if err != nil {

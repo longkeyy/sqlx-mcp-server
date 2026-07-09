@@ -26,11 +26,45 @@ The supported object types are:
 
 The process connects to one database at startup from a URL-style DSN. The active database connection and dialect should be represented by an explicit server or tool context rather than broad package-level state when the code grows beyond the current single-binary shape.
 
+`DATABASE_URL` is the source of truth for the legacy/default target database and includes the database name or SQLite file path. `INSTANCE_NAME` only controls the MCP server display/logging name. `DB_NAME` is accepted only as a legacy alias for the instance name and should not be used in new deployments.
+
+Multiple databases can be configured with Docker-friendly environment variables:
+
+```text
+DATABASE_TCM_URL=sqlite:///app/data/tcm_unified.db
+DATABASE_HERB_URL=sqlite:///app/data/herb.db
+DATABASE_REPORTING_URL=postgres://user:pass@host:5432/reporting
+DEFAULT_DATABASE=TCM
+```
+
+The middle token in `DATABASE_{ID}_URL` becomes the stable lowercase route id. `DATABASE_{ID}_NAME` is optional and controls the MCP server display name for that database. If `DEFAULT_DATABASE` is not set, `DATABASE_URL` is the default when present; otherwise the first configured id in sorted order is used.
+
+HTTP paths:
+
+- Streamable HTTP: `/mcp` for the default database and `/db/{id}/mcp` for a named database.
+- SSE: `/sse` and `/message` for the default database, plus `/db/{id}/sse` and `/db/{id}/message` for named databases.
+
+Each configured database has its own `database/sql` connection pool. Defaults are tuned for low-frequency MCP use: up to 25 open connections for bursts, but only 1 idle connection retained per database.
+
+Pool defaults can be set globally:
+
+```text
+DATABASE_MAX_OPEN_CONNS=25
+DATABASE_MAX_IDLE_CONNS=1
+```
+
+Individual databases can override them:
+
+```text
+DATABASE_TCM_MAX_OPEN_CONNS=10
+DATABASE_TCM_MAX_IDLE_CONNS=1
+```
+
 Supported database drivers:
 
 - MySQL
 - PostgreSQL
-- SQLite
+- SQLite through the pure-Go `modernc.org/sqlite` driver, with `CGO_ENABLED=0` builds supported for cross-compilation.
 - SQL Server
 
 Supported MCP transports:

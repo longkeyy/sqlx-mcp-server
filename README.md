@@ -1,0 +1,346 @@
+# SQL MCP Server
+
+A Model Context Protocol (MCP) server that exposes SQL databases as MCP tools. It supports MySQL, PostgreSQL, SQLite, and SQL Server, with Streamable HTTP, SSE, and stdio transports.
+
+The SQLite driver is `modernc.org/sqlite`, so SQLite builds can run with `CGO_ENABLED=0` for simpler cross-compilation and container builds.
+
+## Features
+
+- Query SQL databases through MCP tools.
+- Supports MySQL, PostgreSQL, SQLite, and SQL Server DSNs.
+- Provides `query`, `execute`, `list_objects`, and `describe_object` tools.
+- Supports Streamable HTTP at `/mcp`.
+- Supports SSE at `/sse` plus `/message`.
+- Supports multiple databases in one process with routes such as `/db/tcm/mcp`.
+- Docker-friendly environment variable configuration.
+- Per-database `database/sql` connection pools.
+- Pure-Go SQLite support for CGO-free builds.
+
+## Quick Start
+
+Run with SQLite:
+
+```bash
+DATABASE_URL=sqlite:///tmp/example.db \
+SERVER_MODE=http \
+SERVER_PORT=8088 \
+go run .
+```
+
+The Streamable HTTP MCP endpoint is:
+
+```text
+http://localhost:8088/mcp
+```
+
+Run with stdio:
+
+```bash
+go run . --dsn sqlite:///tmp/example.db --mode stdio
+```
+
+## Docker
+
+Start the default Docker Compose service:
+
+```bash
+mkdir -p data
+docker compose up -d --build
+```
+
+By default, `docker-compose.yml` maps:
+
+```text
+http://localhost:8088/mcp
+```
+
+The compose file uses `DATABASE_URL=sqlite:///app/data/${DB_FILENAME:-tcm_unified.db}` and mounts `./data` to `/app/data`.
+
+## Configuration
+
+Configuration can be provided by command-line flags, environment variables, or a `.env` file.
+
+CLI flags have priority over environment variables.
+
+| Option | Environment | Default | Description |
+| --- | --- | --- | --- |
+| `--dsn` | `DATABASE_URL` | none | Default database URL-style DSN. |
+| `--mode` | `SERVER_MODE` | `stdio` | Transport mode: `stdio`, `sse`, or `http`. |
+| `--name` | `INSTANCE_NAME` | generated | MCP server display/logging name. |
+| `--port` | `SERVER_PORT` | `8088` | HTTP/SSE listen port. |
+
+`DB_NAME` is still accepted as a legacy alias for `INSTANCE_NAME`, but new deployments should use `INSTANCE_NAME`.
+
+### DSN Formats
+
+```text
+mysql://user:pass@host:3306/dbname
+postgres://user:pass@host:5432/dbname
+postgresql://user:pass@host:5432/dbname
+sqlite:///path/to/db.sqlite
+sqlserver://user:pass@host:1433/dbname
+```
+
+## Multi-Database Routing
+
+Use `DATABASE_{ID}_URL` variables to expose multiple databases from one process:
+
+```env
+DATABASE_TCM_URL=sqlite:///app/data/tcm_unified.db
+DATABASE_HERB_URL=sqlite:///app/data/herb.db
+DATABASE_REPORTING_URL=postgres://user:pass@host:5432/reporting
+DEFAULT_DATABASE=TCM
+```
+
+The `{ID}` part becomes the lowercase route id. For example, `DATABASE_TCM_URL` becomes `tcm`.
+
+Routes:
+
+```text
+/mcp                    -> default database, Streamable HTTP
+/db/tcm/mcp             -> tcm database, Streamable HTTP
+/db/herb/mcp            -> herb database, Streamable HTTP
+
+/sse                    -> default database, SSE stream
+/message                -> default database, SSE message endpoint
+/db/tcm/sse             -> tcm database, SSE stream
+/db/tcm/message         -> tcm database, SSE message endpoint
+```
+
+Optional display names:
+
+```env
+DATABASE_TCM_NAME=tcm-db
+DATABASE_HERB_NAME=herb-db
+```
+
+If `DEFAULT_DATABASE` is not set, `DATABASE_URL` is used as the default when present. Otherwise, the first configured database id in sorted order is used.
+
+## Connection Pool Settings
+
+Each configured database has its own `database/sql` connection pool.
+
+Global defaults:
+
+```env
+DATABASE_MAX_OPEN_CONNS=25
+DATABASE_MAX_IDLE_CONNS=1
+```
+
+Per-database overrides:
+
+```env
+DATABASE_TCM_MAX_OPEN_CONNS=10
+DATABASE_TCM_MAX_IDLE_CONNS=1
+```
+
+The default idle connection count is intentionally low because MCP SQL access is often low-frequency.
+
+## MCP Tools
+
+### `query`
+
+Executes read-oriented SQL and returns compact JSON with columns and row arrays.
+
+Allowed leading statements include `SELECT`, `WITH`, `EXPLAIN`, `SHOW`, and `DESCRIBE`. Mutating statements are rejected by a guardrail.
+
+Arguments:
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `sql` | yes | Read-oriented SQL query. |
+| `max_rows` | no | Maximum rows to return. Defaults to `1000`. |
+
+### `execute`
+
+Executes write or DDL SQL, including `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, and `DROP`.
+
+Arguments:
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `sql` | yes | SQL statement to execute. |
+
+### `list_objects`
+
+Lists database objects as structured JSON.
+
+Arguments:
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `type` | no | `table`, `view`, `procedure`, `function`, or `all`. |
+| `pattern` | no | Case-insensitive regex filter. |
+
+### `describe_object`
+
+Describes a table, view, procedure, or function.
+
+Arguments:
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `object_name` | yes | Object name, optionally schema-qualified. |
+| `object_type` | no | `table`, `view`, `procedure`, or `function`. |
+
+## Security Notes
+
+The `query` tool includes a read-oriented SQL guardrail, but it is not a complete security boundary. Use database users with the least privileges required for your deployment.
+
+Remote HTTP deployments should be protected by authentication, a trusted reverse proxy, VPN, or network policy. This server does not currently implement built-in authentication.
+
+## Design
+
+SQL MCP Server is designed to expose configured databases through small, explicit MCP tools. Tool responses should contain database facts and structured metadata directly, not hidden prompt-like instructions.
+
+### Runtime Model
+
+The server creates one runtime instance per configured database. Each instance owns:
+
+- A parsed URL-style DSN.
+- A dedicated `database/sql` connection pool.
+- A database dialect.
+- An MCP server with tool descriptions generated from that database.
+
+For multi-database deployments, the URL path selects the database instance. Tool calls do not include a database selector argument, which keeps each MCP session scoped to one database and reduces the chance of an LLM accidentally querying the wrong database.
+
+### Tool Contract
+
+The public tool surface is intentionally small:
+
+- `query` is for read-oriented SQL and returns compact structured result sets.
+- `execute` is for writes, DDL, and stored procedure calls.
+- `list_objects` lists tables, views, procedures, and functions.
+- `describe_object` returns object metadata or definitions.
+
+`describe_object` is used instead of a longer schema-specific name because it reflects the actual behavior across object types. Tables return structural metadata such as columns and indexes. Views, procedures, and functions return definition text when the database exposes it.
+
+### Result Format
+
+Tool results are JSON text. Query results use a compact table shape:
+
+```json
+{
+  "format": "columnar_rows",
+  "columns": ["id", "name", "created_at"],
+  "rows": [
+    [1, "alice", "2026-05-17T10:00:00Z"],
+    [2, "bob", null]
+  ],
+  "row_count": 2,
+  "truncated": false,
+  "max_rows": 1000,
+  "dialect": "PostgreSQL"
+}
+```
+
+This preserves column order, represents `null` clearly, and avoids repeating field names for every row.
+
+Object listings use object records:
+
+```json
+{
+  "database": "main",
+  "dialect": "SQLite",
+  "objects": [
+    {"type": "table", "name": "prescriptions"},
+    {"type": "view", "name": "active_prescriptions"}
+  ]
+}
+```
+
+Object descriptions use semantic JSON. Table descriptions return columns and indexes; other supported object types return definitions when available:
+
+```json
+{
+  "object": {"type": "table", "schema": "public", "name": "users"},
+  "columns": [
+    {"name": "id", "type": "integer", "nullable": false, "default": null},
+    {"name": "name", "type": "text", "nullable": true, "default": null}
+  ],
+  "indexes": [
+    {"name": "users_pkey", "columns": ["id"], "unique": true}
+  ],
+  "dialect": "PostgreSQL"
+}
+```
+
+### Read Query Guard
+
+The `query` tool enforces a read-oriented contract before sending SQL to the database.
+
+The guard:
+
+- Strips or ignores comments before classification.
+- Rejects multiple statements.
+- Allows read-oriented leading forms such as `SELECT`, `WITH`, `EXPLAIN`, `SHOW`, and `DESCRIBE`.
+- Rejects known mutating forms such as `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, `TRUNCATE`, `MERGE`, `CALL`, `EXEC`, `GRANT`, `REVOKE`, and unsafe SQLite pragmas.
+
+This is a guardrail, not a complete sandbox. SQL dialects can expose side effects through functions, extensions, or special statement forms. Production deployments should still use least-privilege database accounts.
+
+### Metadata Lookup
+
+Metadata lookup avoids treating object names as arbitrary SQL fragments.
+
+The preferred behavior is:
+
+- Parse qualified object names into `schema` and `name` where the dialect supports schemas.
+- Use parameterized metadata queries wherever the database driver supports them.
+- Quote identifiers only when an identifier must appear in identifier position, such as SQLite PRAGMA statements.
+- Return schema-qualified object names from `list_objects` for databases that support schemas, and accept those names in `describe_object`.
+
+### LLM Contract
+
+Tool responses should contain explicit fields such as:
+
+- `database`
+- `dialect`
+- `objects`
+- `definition`
+- `truncated`
+
+If a client wants an LLM to inspect an object before querying it, that policy belongs in the client or tool description, not as hidden instructions embedded in data responses.
+
+### Code Organization
+
+The current single-package layout is acceptable for a small binary, but the code keeps these boundaries visible:
+
+- Configuration and DSN parsing.
+- Runtime database instance setup.
+- MCP server setup.
+- Tool handlers.
+- Dialect-specific metadata queries.
+- Result encoding.
+- Read-query validation.
+
+If the implementation grows, these boundaries should move into small internal packages or explicit types rather than broad package-level state.
+
+## Development
+
+Run tests:
+
+```bash
+go test ./...
+```
+
+Verify CGO-free SQLite support:
+
+```bash
+CGO_ENABLED=0 go test ./...
+```
+
+Build for Linux ARM64:
+
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o dist/sql-mcp-linux-arm64 .
+```
+
+Build all release targets from the Makefile:
+
+```bash
+make release
+```
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).

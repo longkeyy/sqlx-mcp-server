@@ -10,7 +10,15 @@ services:
       - "${PORT:-8088}:8088"
     environment:
       - DATABASE_URL=sqlite:///app/data/${DB_FILENAME:-tcm_unified.db}
-      - DB_NAME=tcm-db
+      - INSTANCE_NAME=tcm-db
+      # Optional multi-database routes:
+      # - DATABASE_TCM_URL=sqlite:///app/data/tcm_unified.db
+      # - DATABASE_HERB_URL=sqlite:///app/data/herb.db
+      # - DEFAULT_DATABASE=TCM
+      # Optional pool defaults/overrides:
+      # - DATABASE_MAX_OPEN_CONNS=25
+      # - DATABASE_MAX_IDLE_CONNS=1
+      # - DATABASE_TCM_MAX_OPEN_CONNS=10
       - SERVER_MODE=http
       - SERVER_PORT=8088
     volumes:
