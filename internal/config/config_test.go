@@ -4,7 +4,7 @@ import "testing"
 
 func TestParseConfigUsesDatabaseURLAsDSN(t *testing.T) {
 	config, err := parseConfig(nil, map[string]string{
-		envDatabaseURL: "sqlite:///tmp/tcm_unified.db",
+		envDatabaseURL: "sqlite:///tmp/example.db",
 		envServerMode:  "http",
 		envServerPort:  "8090",
 	})
@@ -12,7 +12,7 @@ func TestParseConfigUsesDatabaseURLAsDSN(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if config.DSN != "sqlite:///tmp/tcm_unified.db" {
+	if config.DSN != "sqlite:///tmp/example.db" {
 		t.Fatalf("expected DSN from DATABASE_URL, got %q", config.DSN)
 	}
 	if config.ServerMode != "http" {
@@ -32,19 +32,19 @@ func TestParseConfigUsesDatabaseURLAsDSN(t *testing.T) {
 func TestParseConfigUsesInstanceNameNotDatabaseName(t *testing.T) {
 	config, err := parseConfig(nil, map[string]string{
 		envDatabaseURL:  "sqlite://:memory:",
-		envInstanceName: "tcm-db",
+		envInstanceName: "app-db",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if config.Name != "tcm-db" {
+	if config.Name != "app-db" {
 		t.Fatalf("expected instance name from INSTANCE_NAME, got %q", config.Name)
 	}
 	if config.DSN != "sqlite://:memory:" {
 		t.Fatalf("expected DSN to remain independent from instance name, got %q", config.DSN)
 	}
-	if config.Databases[0].Name != "tcm-db" {
+	if config.Databases[0].Name != "app-db" {
 		t.Fatalf("expected database display name from INSTANCE_NAME, got %q", config.Databases[0].Name)
 	}
 }
@@ -65,35 +65,35 @@ func TestParseConfigKeepsDBNameAsLegacyInstanceName(t *testing.T) {
 
 func TestParseConfigLoadsNamedDatabases(t *testing.T) {
 	config, err := parseConfig(nil, map[string]string{
-		"DATABASE_TCM_URL":            "sqlite:///tmp/tcm.db",
-		"DATABASE_TCM_NAME":           "tcm-db",
-		"DATABASE_TCM_MAX_OPEN_CONNS": "8",
-		"DATABASE_TCM_MAX_IDLE_CONNS": "2",
-		"DATABASE_HERB_URL":           "sqlite:///tmp/herb.db",
+		"DATABASE_APP_URL":            "sqlite:///tmp/app.db",
+		"DATABASE_APP_NAME":           "app-db",
+		"DATABASE_APP_MAX_OPEN_CONNS": "8",
+		"DATABASE_APP_MAX_IDLE_CONNS": "2",
+		"DATABASE_REPORTING_URL":      "sqlite:///tmp/reporting.db",
 		envDatabaseMaxOpenConns:       "3",
-		envDefaultDatabase:            "TCM",
+		envDefaultDatabase:            "APP",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if config.DefaultDatabase != "tcm" {
-		t.Fatalf("expected tcm default database, got %q", config.DefaultDatabase)
+	if config.DefaultDatabase != "app" {
+		t.Fatalf("expected app default database, got %q", config.DefaultDatabase)
 	}
 	if len(config.Databases) != 2 {
 		t.Fatalf("expected two databases, got %+v", config.Databases)
 	}
-	if config.Databases[0].ID != "herb" || config.Databases[1].ID != "tcm" {
+	if config.Databases[0].ID != "app" || config.Databases[1].ID != "reporting" {
 		t.Fatalf("expected sorted database ids, got %+v", config.Databases)
 	}
-	if config.Databases[1].Name != "tcm-db" {
-		t.Fatalf("expected optional database name, got %+v", config.Databases[1])
+	if config.Databases[0].Name != "app-db" {
+		t.Fatalf("expected optional database name, got %+v", config.Databases[0])
 	}
-	if config.Databases[0].MaxOpenConns != 3 || config.Databases[0].MaxIdleConns != defaultMaxIdleConns {
-		t.Fatalf("expected herb to use global pool defaults, got %+v", config.Databases[0])
+	if config.Databases[1].MaxOpenConns != 3 || config.Databases[1].MaxIdleConns != defaultMaxIdleConns {
+		t.Fatalf("expected reporting to use global pool defaults, got %+v", config.Databases[1])
 	}
-	if config.Databases[1].MaxOpenConns != 8 || config.Databases[1].MaxIdleConns != 2 {
-		t.Fatalf("expected tcm to use per-database pool settings, got %+v", config.Databases[1])
+	if config.Databases[0].MaxOpenConns != 8 || config.Databases[0].MaxIdleConns != 2 {
+		t.Fatalf("expected app to use per-database pool settings, got %+v", config.Databases[0])
 	}
 }
 
@@ -108,7 +108,7 @@ func TestParseConfigRejectsInvalidDatabaseID(t *testing.T) {
 
 func TestParseConfigRejectsUnknownDefaultDatabase(t *testing.T) {
 	_, err := parseConfig(nil, map[string]string{
-		"DATABASE_TCM_URL": "sqlite:///tmp/tcm.db",
+		"DATABASE_APP_URL": "sqlite:///tmp/app.db",
 		envDefaultDatabase: "missing",
 	})
 	if err == nil {
@@ -118,9 +118,9 @@ func TestParseConfigRejectsUnknownDefaultDatabase(t *testing.T) {
 
 func TestParseConfigRejectsInvalidPoolSettings(t *testing.T) {
 	_, err := parseConfig(nil, map[string]string{
-		"DATABASE_TCM_URL":            "sqlite:///tmp/tcm.db",
-		"DATABASE_TCM_MAX_OPEN_CONNS": "1",
-		"DATABASE_TCM_MAX_IDLE_CONNS": "2",
+		"DATABASE_APP_URL":            "sqlite:///tmp/app.db",
+		"DATABASE_APP_MAX_OPEN_CONNS": "1",
+		"DATABASE_APP_MAX_IDLE_CONNS": "2",
 	})
 	if err == nil {
 		t.Fatal("expected invalid pool settings error")
@@ -129,8 +129,8 @@ func TestParseConfigRejectsInvalidPoolSettings(t *testing.T) {
 
 func TestParseConfigRejectsDuplicateNormalizedDatabaseID(t *testing.T) {
 	_, err := parseConfig(nil, map[string]string{
-		"DATABASE_TCM_URL": "sqlite:///tmp/tcm.db",
-		"DATABASE_tcm_URL": "sqlite:///tmp/tcm2.db",
+		"DATABASE_APP_URL": "sqlite:///tmp/app.db",
+		"DATABASE_app_URL": "sqlite:///tmp/app2.db",
 	})
 	if err == nil {
 		t.Fatal("expected duplicate database id error")

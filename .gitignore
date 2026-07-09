@@ -16,6 +16,7 @@ dist/
 .env
 docker-compose.override.yml
 /deploy.sh
+/undeploy.sh
 /dify/
 
 # OS files
