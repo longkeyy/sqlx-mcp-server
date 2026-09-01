@@ -68,6 +68,12 @@ Configuration can be provided by command-line flags, environment variables, or a
 
 CLI flags have priority over environment variables.
 
+For local development, start from the example file:
+
+```bash
+cp .env.example .env
+```
+
 | Option | Environment | Default | Description |
 | --- | --- | --- | --- |
 | `--dsn` | `DATABASE_URL` | none | Default database URL-style DSN. |
