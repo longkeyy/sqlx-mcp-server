@@ -63,6 +63,19 @@ func TestParseConfigKeepsDBNameAsLegacyInstanceName(t *testing.T) {
 	}
 }
 
+func TestParseConfigAcceptsAllServerMode(t *testing.T) {
+	config, err := parseConfig(nil, map[string]string{
+		envDatabaseURL: "sqlite://:memory:",
+		envServerMode:  "all",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ServerMode != "all" {
+		t.Fatalf("expected all mode, got %q", config.ServerMode)
+	}
+}
+
 func TestParseConfigLoadsNamedDatabases(t *testing.T) {
 	config, err := parseConfig(nil, map[string]string{
 		"DATABASE_APP_URL":            "sqlite:///tmp/app.db",

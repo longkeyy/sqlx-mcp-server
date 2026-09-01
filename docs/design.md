@@ -77,6 +77,7 @@ Supported MCP transports:
 - stdio
 - SSE
 - streamable HTTP
+- combined Streamable HTTP and SSE on one port with `SERVER_MODE=all`
 
 ## Result Format
 

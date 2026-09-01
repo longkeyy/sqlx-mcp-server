@@ -68,6 +68,18 @@ func main() {
 		if err := http.ListenAndServe(addr, mux); err != nil {
 			log.Fatalf("Server error: %v", err)
 		}
+	case "all":
+		mux := http.NewServeMux()
+		if err := sqlmcp.MountHTTPServers(mux, apps, cfg.DefaultDatabase); err != nil {
+			log.Fatal(err)
+		}
+		if err := sqlmcp.MountSSEServers(mux, apps, cfg.DefaultDatabase); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("MCP endpoints listening on %s/mcp and %s/sse; database endpoints on %s/db/{id}/mcp and %s/db/{id}/sse", addr, addr, addr, addr)
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			log.Fatalf("Server error: %v", err)
+		}
 	default:
 		log.Fatalf("Unknown server mode: %s", cfg.ServerMode)
 	}

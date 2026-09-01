@@ -77,7 +77,7 @@ cp .env.example .env
 | Option | Environment | Default | Description |
 | --- | --- | --- | --- |
 | `--dsn` | `DATABASE_URL` | none | Default database URL-style DSN. |
-| `--mode` | `SERVER_MODE` | `stdio` | Transport mode: `stdio`, `sse`, or `http`. |
+| `--mode` | `SERVER_MODE` | `stdio` | Transport mode: `stdio`, `sse`, `http`, or `all`. |
 | `--name` | `INSTANCE_NAME` | generated | MCP server display/logging name. |
 | `--port` | `SERVER_PORT` | `8088` | HTTP/SSE listen port. |
 
@@ -133,6 +133,8 @@ Routes:
 /db/app/sse             -> app database, SSE stream
 /db/app/message         -> app database, SSE message endpoint
 ```
+
+Use `SERVER_MODE=all` to expose Streamable HTTP and SSE routes on the same port.
 
 Optional display names:
 

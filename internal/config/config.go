@@ -59,7 +59,7 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 
 	// Define command line flags
 	dsn := flags.String("dsn", "", "Database connection DSN (e.g., mysql://user:pass@host:3306/db)")
-	mode := flags.String("mode", "", "Server mode: stdio, sse, http (default: stdio)")
+	mode := flags.String("mode", "", "Server mode: stdio, sse, http, all (default: stdio)")
 	name := flags.String("name", "", "Instance name for MCP server display/logging (optional)")
 	port := flags.Int("port", 8088, "Port for SSE/HTTP server (default: 8088)")
 
@@ -128,9 +128,9 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 	}
 
 	// Validate server mode
-	validModes := map[string]bool{"stdio": true, "sse": true, "http": true}
+	validModes := map[string]bool{"stdio": true, "sse": true, "http": true, "all": true}
 	if !validModes[config.ServerMode] {
-		return nil, fmt.Errorf("invalid server mode: %s (use stdio, sse, or http)", config.ServerMode)
+		return nil, fmt.Errorf("invalid server mode: %s (use stdio, sse, http, or all)", config.ServerMode)
 	}
 
 	return config, nil
