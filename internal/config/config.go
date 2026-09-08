@@ -21,8 +21,7 @@ const (
 	envDefaultDatabase      = "DEFAULT_DATABASE"
 	envInstanceName         = "INSTANCE_NAME"
 	envLegacyDBName         = "DB_NAME"
-	envServerMode           = "SERVER_MODE"
-	envServerPort           = "SERVER_PORT"
+	envListen               = "LISTEN"
 	envDatabaseMaxOpenConns = "DATABASE_MAX_OPEN_CONNS"
 	envDatabaseMaxIdleConns = "DATABASE_MAX_IDLE_CONNS"
 )
@@ -32,9 +31,8 @@ var databaseURLEnvPattern = regexp.MustCompile(`^DATABASE_(.+)_URL$`)
 // AppConfig holds the application configuration
 type AppConfig struct {
 	DSN             string
-	ServerMode      string
 	Name            string
-	Port            int
+	Listen          string
 	Databases       []DatabaseConfig
 	DefaultDatabase string
 }
@@ -59,9 +57,8 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 
 	// Define command line flags
 	dsn := flags.String("dsn", "", "Database connection DSN (e.g., mysql://user:pass@host:3306/db)")
-	mode := flags.String("mode", "", "Server mode: stdio, sse, http, all (default: stdio)")
 	name := flags.String("name", "", "Instance name for MCP server display/logging (optional)")
-	port := flags.Int("port", 8088, "Port for SSE/HTTP server (default: 8088)")
+	listen := flags.String("listen", "", "Network listen address for HTTP/SSE server (e.g., :8088 or 127.0.0.1:8088). Empty uses stdio.")
 
 	if err := flags.Parse(args); err != nil {
 		return nil, err
@@ -80,13 +77,6 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 		config.DSN = envDSN
 	}
 
-	// Server mode priority: --mode flag > SERVER_MODE env
-	if *mode != "" {
-		config.ServerMode = *mode
-	} else if envMode, ok := lookupEnv(envServerMode); ok && envMode != "" {
-		config.ServerMode = envMode
-	}
-
 	// Instance name priority: --name flag > INSTANCE_NAME env > DB_NAME legacy env
 	if *name != "" {
 		config.Name = *name
@@ -96,22 +86,10 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 		config.Name = envName
 	}
 
-	// Port priority: --port flag > SERVER_PORT env
-	if *port != 8088 {
-		config.Port = *port
-	} else if envPort, ok := lookupEnv(envServerPort); ok && envPort != "" {
-		if p, err := strconv.Atoi(envPort); err == nil && p > 0 {
-			config.Port = p
-		} else {
-			config.Port = 8088 // default
-		}
-	} else {
-		config.Port = 8088
-	}
-
-	// Default server mode
-	if config.ServerMode == "" {
-		config.ServerMode = "stdio"
+	if *listen != "" {
+		config.Listen = strings.TrimSpace(*listen)
+	} else if envListen, ok := lookupEnv(envListen); ok {
+		config.Listen = strings.TrimSpace(envListen)
 	}
 
 	databases, defaultDatabase, err := parseDatabaseConfigs(config.DSN, config.Name, env)
@@ -125,12 +103,6 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 	}
 	if config.Name == "" && defaultDatabase != "" {
 		config.Name = databaseByID(databases, defaultDatabase).Name
-	}
-
-	// Validate server mode
-	validModes := map[string]bool{"stdio": true, "sse": true, "http": true, "all": true}
-	if !validModes[config.ServerMode] {
-		return nil, fmt.Errorf("invalid server mode: %s (use stdio, sse, http, or all)", config.ServerMode)
 	}
 
 	return config, nil

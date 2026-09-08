@@ -5,8 +5,7 @@ import "testing"
 func TestParseConfigUsesDatabaseURLAsDSN(t *testing.T) {
 	config, err := parseConfig(nil, map[string]string{
 		envDatabaseURL: "sqlite:///tmp/example.db",
-		envServerMode:  "http",
-		envServerPort:  "8090",
+		envListen:      ":8090",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -15,11 +14,8 @@ func TestParseConfigUsesDatabaseURLAsDSN(t *testing.T) {
 	if config.DSN != "sqlite:///tmp/example.db" {
 		t.Fatalf("expected DSN from DATABASE_URL, got %q", config.DSN)
 	}
-	if config.ServerMode != "http" {
-		t.Fatalf("expected http mode, got %q", config.ServerMode)
-	}
-	if config.Port != 8090 {
-		t.Fatalf("expected port 8090, got %d", config.Port)
+	if config.Listen != ":8090" {
+		t.Fatalf("expected listen address from LISTEN, got %q", config.Listen)
 	}
 	if config.DefaultDatabase != defaultDatabaseID {
 		t.Fatalf("expected default database id, got %q", config.DefaultDatabase)
@@ -63,16 +59,27 @@ func TestParseConfigKeepsDBNameAsLegacyInstanceName(t *testing.T) {
 	}
 }
 
-func TestParseConfigAcceptsAllServerMode(t *testing.T) {
+func TestParseConfigUsesCLIListen(t *testing.T) {
 	config, err := parseConfig(nil, map[string]string{
 		envDatabaseURL: "sqlite://:memory:",
-		envServerMode:  "all",
+		envListen:      ":8088",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.ServerMode != "all" {
-		t.Fatalf("expected all mode, got %q", config.ServerMode)
+	if config.Listen != ":8088" {
+		t.Fatalf("expected listen address from env, got %q", config.Listen)
+	}
+
+	config, err = parseConfig([]string{"--listen", "127.0.0.1:18088"}, map[string]string{
+		envDatabaseURL: "sqlite://:memory:",
+		envListen:      ":8088",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Listen != "127.0.0.1:18088" {
+		t.Fatalf("expected CLI listen address to win, got %q", config.Listen)
 	}
 }
 

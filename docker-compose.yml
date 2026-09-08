@@ -24,7 +24,6 @@ services:
       # - DATABASE_MAX_OPEN_CONNS=25
       # - DATABASE_MAX_IDLE_CONNS=1
       # - DATABASE_APP_MAX_OPEN_CONNS=10
-      - SERVER_MODE=${SERVER_MODE:-all}
-      - SERVER_PORT=8088
+      - LISTEN=${LISTEN:-:8088}
     volumes:
       - ./data:/app/data

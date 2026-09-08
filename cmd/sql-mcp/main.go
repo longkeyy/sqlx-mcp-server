@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -38,11 +37,8 @@ func main() {
 	}
 	defer sqlmcp.CloseAppServers(apps)
 
-	addr := fmt.Sprintf(":%d", cfg.Port)
-	log.Printf("Starting %d database instance(s) in %s mode on %s; default=%s", len(apps), cfg.ServerMode, addr, cfg.DefaultDatabase)
-
-	switch cfg.ServerMode {
-	case "stdio":
+	if cfg.Listen == "" {
+		log.Printf("Starting %d database instance(s) in stdio mode; default=%s", len(apps), cfg.DefaultDatabase)
 		app, err := sqlmcp.GetDefaultApp(apps, cfg.DefaultDatabase)
 		if err != nil {
 			log.Fatal(err)
@@ -50,37 +46,19 @@ func main() {
 		if err := mcpserver.ServeStdio(app.MCPServer()); err != nil {
 			log.Printf("Stdio server error: %v\n", err)
 		}
-	case "sse":
-		mux := http.NewServeMux()
-		if err := sqlmcp.MountSSEServers(mux, apps, cfg.DefaultDatabase); err != nil {
-			log.Fatal(err)
-		}
-		log.Printf("SSE default endpoint listening on %s/sse; database endpoints on %s/db/{id}/sse", addr, addr)
-		if err := http.ListenAndServe(addr, mux); err != nil {
-			log.Fatalf("Server error: %v", err)
-		}
-	case "http":
-		mux := http.NewServeMux()
-		if err := sqlmcp.MountHTTPServers(mux, apps, cfg.DefaultDatabase); err != nil {
-			log.Fatal(err)
-		}
-		log.Printf("StreamableHTTP default endpoint listening on %s/mcp; database endpoints on %s/db/{id}/mcp", addr, addr)
-		if err := http.ListenAndServe(addr, mux); err != nil {
-			log.Fatalf("Server error: %v", err)
-		}
-	case "all":
-		mux := http.NewServeMux()
-		if err := sqlmcp.MountHTTPServers(mux, apps, cfg.DefaultDatabase); err != nil {
-			log.Fatal(err)
-		}
-		if err := sqlmcp.MountSSEServers(mux, apps, cfg.DefaultDatabase); err != nil {
-			log.Fatal(err)
-		}
-		log.Printf("MCP endpoints listening on %s/mcp and %s/sse; database endpoints on %s/db/{id}/mcp and %s/db/{id}/sse", addr, addr, addr, addr)
-		if err := http.ListenAndServe(addr, mux); err != nil {
-			log.Fatalf("Server error: %v", err)
-		}
-	default:
-		log.Fatalf("Unknown server mode: %s", cfg.ServerMode)
+		return
+	}
+
+	mux := http.NewServeMux()
+	if err := sqlmcp.MountHTTPServers(mux, apps, cfg.DefaultDatabase); err != nil {
+		log.Fatal(err)
+	}
+	if err := sqlmcp.MountSSEServers(mux, apps, cfg.DefaultDatabase); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Starting %d database instance(s) on %s; default=%s", len(apps), cfg.Listen, cfg.DefaultDatabase)
+	log.Printf("MCP endpoints listening on %s/mcp and %s/sse; database endpoints on %s/db/{id}/mcp and %s/db/{id}/sse", cfg.Listen, cfg.Listen, cfg.Listen, cfg.Listen)
+	if err := http.ListenAndServe(cfg.Listen, mux); err != nil {
+		log.Fatalf("Server error: %v", err)
 	}
 }

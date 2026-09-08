@@ -41,7 +41,7 @@ DEFAULT_DATABASE=APP
 
 The middle token in `DATABASE_{ID}_URL` becomes the stable lowercase route id. `DATABASE_{ID}_NAME` is optional and controls the MCP server display name for that database. If `DEFAULT_DATABASE` is not set, `DATABASE_URL` is the default when present; otherwise the first configured id in sorted order is used.
 
-HTTP paths:
+When `LISTEN` is set to a network address such as `:8088` or `127.0.0.1:8088`, the process starts an HTTP server and exposes these paths:
 
 - Streamable HTTP: `/mcp` for the default database and `/db/{id}/mcp` for a named database.
 - SSE: `/sse` and `/message` for the default database, plus `/db/{id}/sse` and `/db/{id}/message` for named databases.
@@ -72,12 +72,14 @@ Supported database drivers:
 - SQL Server
 - ClickHouse through the official ClickHouse Go driver.
 
+If `LISTEN` is empty, the process uses stdio instead of starting a network listener.
+
 Supported MCP transports:
 
 - stdio
 - SSE
 - streamable HTTP
-- combined Streamable HTTP and SSE on one port with `SERVER_MODE=all`
+- combined Streamable HTTP and SSE on one network listener with `LISTEN`
 
 ## Result Format
 

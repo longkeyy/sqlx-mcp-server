@@ -22,8 +22,7 @@ Run with SQLite:
 
 ```bash
 DATABASE_URL=sqlite:///tmp/example.db \
-SERVER_MODE=http \
-SERVER_PORT=8088 \
+LISTEN=:8088 \
 go run ./cmd/sql-mcp
 ```
 
@@ -36,7 +35,7 @@ http://localhost:8088/mcp
 Run with stdio:
 
 ```bash
-go run ./cmd/sql-mcp --dsn sqlite:///tmp/example.db --mode stdio
+go run ./cmd/sql-mcp --dsn sqlite:///tmp/example.db
 ```
 
 ## Docker
@@ -77,9 +76,8 @@ cp .env.example .env
 | Option | Environment | Default | Description |
 | --- | --- | --- | --- |
 | `--dsn` | `DATABASE_URL` | none | Default database URL-style DSN. |
-| `--mode` | `SERVER_MODE` | `stdio` | Transport mode: `stdio`, `sse`, `http`, or `all`. |
 | `--name` | `INSTANCE_NAME` | generated | MCP server display/logging name. |
-| `--port` | `SERVER_PORT` | `8088` | HTTP/SSE listen port. |
+| `--listen` | `LISTEN` | empty | Network listen address for HTTP/SSE, such as `:8088` or `127.0.0.1:8088`. Empty uses stdio. |
 
 `DB_NAME` is still accepted as a legacy alias for `INSTANCE_NAME`, but new deployments should use `INSTANCE_NAME`.
 
@@ -134,7 +132,7 @@ Routes:
 /db/app/message         -> app database, SSE message endpoint
 ```
 
-Use `SERVER_MODE=all` to expose Streamable HTTP and SSE routes on the same port.
+Set `LISTEN` to expose Streamable HTTP and SSE routes on the same port. Leave it empty to use stdio.
 
 Optional display names:
 
