@@ -83,6 +83,30 @@ func TestParseConfigUsesCLIListen(t *testing.T) {
 	}
 }
 
+func TestParseConfigUsesAuthToken(t *testing.T) {
+	config, err := parseConfig(nil, map[string]string{
+		envDatabaseURL: "sqlite://:memory:",
+		envAuthToken:   "env-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.AuthToken != "env-token" {
+		t.Fatalf("expected auth token from env, got %q", config.AuthToken)
+	}
+
+	config, err = parseConfig([]string{"--auth-token", "cli-token"}, map[string]string{
+		envDatabaseURL: "sqlite://:memory:",
+		envAuthToken:   "env-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.AuthToken != "cli-token" {
+		t.Fatalf("expected CLI auth token to win, got %q", config.AuthToken)
+	}
+}
+
 func TestParseConfigLoadsNamedDatabases(t *testing.T) {
 	config, err := parseConfig(nil, map[string]string{
 		"DATABASE_APP_URL":            "sqlite:///tmp/app.db",

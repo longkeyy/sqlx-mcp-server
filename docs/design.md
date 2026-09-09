@@ -74,6 +74,8 @@ Supported database drivers:
 
 If `LISTEN` is empty, the process uses stdio instead of starting a network listener.
 
+HTTP/SSE deployments can set `AUTH_TOKEN` to require either `Authorization: Bearer <token>` or `?token=<token>` on MCP endpoints. Query-token authentication exists as a client compatibility fallback; Bearer headers are preferred.
+
 Supported MCP transports:
 
 - stdio

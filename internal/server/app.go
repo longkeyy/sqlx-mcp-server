@@ -147,7 +147,7 @@ func MountSSEServers(mux *http.ServeMux, apps map[string]*AppServer, defaultID s
 	if err != nil {
 		return err
 	}
-	defaultSSE := mcpserver.NewSSEServer(defaultApp.mcpServer)
+	defaultSSE := mcpserver.NewSSEServer(defaultApp.mcpServer, mcpserver.WithAppendQueryToMessageEndpoint())
 	mux.Handle("/sse", defaultSSE)
 	mux.Handle("/message", defaultSSE)
 
@@ -156,6 +156,7 @@ func MountSSEServers(mux *http.ServeMux, apps map[string]*AppServer, defaultID s
 			app.mcpServer,
 			mcpserver.WithSSEEndpoint("/db/"+id+"/sse"),
 			mcpserver.WithMessageEndpoint("/db/"+id+"/message"),
+			mcpserver.WithAppendQueryToMessageEndpoint(),
 		)
 		mux.Handle("/db/"+id+"/sse", sse)
 		mux.Handle("/db/"+id+"/message", sse)

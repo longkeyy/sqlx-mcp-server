@@ -22,6 +22,7 @@ const (
 	envInstanceName         = "INSTANCE_NAME"
 	envLegacyDBName         = "DB_NAME"
 	envListen               = "LISTEN"
+	envAuthToken            = "AUTH_TOKEN"
 	envDatabaseMaxOpenConns = "DATABASE_MAX_OPEN_CONNS"
 	envDatabaseMaxIdleConns = "DATABASE_MAX_IDLE_CONNS"
 )
@@ -33,6 +34,7 @@ type AppConfig struct {
 	DSN             string
 	Name            string
 	Listen          string
+	AuthToken       string
 	Databases       []DatabaseConfig
 	DefaultDatabase string
 }
@@ -59,6 +61,7 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 	dsn := flags.String("dsn", "", "Database connection DSN (e.g., mysql://user:pass@host:3306/db)")
 	name := flags.String("name", "", "Instance name for MCP server display/logging (optional)")
 	listen := flags.String("listen", "", "Network listen address for HTTP/SSE server (e.g., :8088 or 127.0.0.1:8088). Empty uses stdio.")
+	authToken := flags.String("auth-token", "", "HTTP/SSE bearer token. Empty disables built-in authentication.")
 
 	if err := flags.Parse(args); err != nil {
 		return nil, err
@@ -90,6 +93,11 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 		config.Listen = strings.TrimSpace(*listen)
 	} else if envListen, ok := lookupEnv(envListen); ok {
 		config.Listen = strings.TrimSpace(envListen)
+	}
+	if *authToken != "" {
+		config.AuthToken = strings.TrimSpace(*authToken)
+	} else if envAuthToken, ok := lookupEnv(envAuthToken); ok {
+		config.AuthToken = strings.TrimSpace(envAuthToken)
 	}
 
 	databases, defaultDatabase, err := parseDatabaseConfigs(config.DSN, config.Name, env)

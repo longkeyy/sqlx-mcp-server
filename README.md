@@ -78,6 +78,7 @@ cp .env.example .env
 | `--dsn` | `DATABASE_URL` | none | Default database URL-style DSN. |
 | `--name` | `INSTANCE_NAME` | generated | MCP server display/logging name. |
 | `--listen` | `LISTEN` | empty | Network listen address for HTTP/SSE, such as `:8088` or `127.0.0.1:8088`. Empty uses stdio. |
+| `--auth-token` | `AUTH_TOKEN` | empty | Optional token for HTTP/SSE authentication. Empty disables built-in authentication. |
 
 `DB_NAME` is still accepted as a legacy alias for `INSTANCE_NAME`, but new deployments should use `INSTANCE_NAME`.
 
@@ -162,6 +163,71 @@ DATABASE_APP_MAX_IDLE_CONNS=1
 ```
 
 The default idle connection count is intentionally low because MCP SQL access is often low-frequency.
+
+## Authentication
+
+Set `AUTH_TOKEN` to protect HTTP/SSE endpoints:
+
+```env
+AUTH_TOKEN=change-me
+LISTEN=127.0.0.1:8088
+```
+
+Preferred clients should send:
+
+```http
+Authorization: Bearer change-me
+```
+
+For clients that cannot send custom headers, a query parameter fallback is also accepted:
+
+```text
+http://127.0.0.1:8088/mcp?token=change-me
+http://127.0.0.1:8088/sse?token=change-me
+```
+
+`?token=` is less private because URLs can appear in logs and shell history. Prefer Bearer headers when the client supports them.
+
+### Client Examples
+
+Codex:
+
+```toml
+[mcp_servers.sql-mcp]
+url = "http://127.0.0.1:8088/mcp"
+bearer_token_env_var = "SQL_MCP_AUTH_TOKEN"
+```
+
+Claude Code:
+
+```bash
+claude mcp add --transport http sql-mcp http://127.0.0.1:8088/mcp \
+  --header "Authorization: Bearer ${SQL_MCP_AUTH_TOKEN}"
+```
+
+opencode:
+
+```json
+{
+  "mcp": {
+    "sql-mcp": {
+      "type": "remote",
+      "url": "http://127.0.0.1:8088/mcp",
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {env:SQL_MCP_AUTH_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Fallback URL form:
+
+```text
+http://127.0.0.1:8088/mcp?token=change-me
+http://127.0.0.1:8088/sse?token=change-me
+```
 
 ## MCP Tools
 

@@ -57,8 +57,11 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("Starting %d database instance(s) on %s; default=%s", len(apps), cfg.Listen, cfg.DefaultDatabase)
+	if cfg.AuthToken != "" {
+		log.Printf("HTTP/SSE authentication enabled")
+	}
 	log.Printf("MCP endpoints listening on %s/mcp and %s/sse; database endpoints on %s/db/{id}/mcp and %s/db/{id}/sse", cfg.Listen, cfg.Listen, cfg.Listen, cfg.Listen)
-	if err := http.ListenAndServe(cfg.Listen, mux); err != nil {
+	if err := http.ListenAndServe(cfg.Listen, sqlmcp.AuthMiddleware(cfg.AuthToken)(mux)); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}
 }
