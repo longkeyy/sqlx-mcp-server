@@ -40,11 +40,22 @@ go run ./cmd/sql-mcp --dsn sqlite:///tmp/example.db
 
 ## Docker
 
+Run the published multi-architecture image:
+
+```bash
+docker run --rm -p 8088:8088 \
+  -e DATABASE_URL=sqlite://:memory: \
+  -e LISTEN=:8088 \
+  longkeyy/sqlx-mcp-server:latest
+```
+
+The image is published for `linux/amd64` and `linux/arm64`.
+
 Start the default Docker Compose service:
 
 ```bash
 mkdir -p data
-docker compose up -d --build
+docker compose up -d
 ```
 
 By default, `docker-compose.yml` maps:
@@ -58,7 +69,16 @@ The compose file uses `DATABASE_URL=sqlite://:memory:` by default and mounts `./
 For a local SQLite file, use an ignored `docker-compose.override.yml` or export `DATABASE_URL` before starting Compose:
 
 ```bash
-DATABASE_URL=sqlite:///app/data/example.db docker compose up -d --build
+DATABASE_URL=sqlite:///app/data/example.db docker compose up -d
+```
+
+Publish a multi-architecture image:
+
+```bash
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t longkeyy/sqlx-mcp-server:latest \
+  --push .
 ```
 
 ## Configuration

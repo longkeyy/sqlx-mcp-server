@@ -1,9 +1,6 @@
 services:
   sql-mcp:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: docker.lucene.cc/sql-mcp:latest
+    image: longkeyy/sqlx-mcp-server:latest
     container_name: sql-mcp
     restart: unless-stopped
     ports:
