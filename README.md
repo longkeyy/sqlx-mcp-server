@@ -40,7 +40,7 @@ go run ./cmd/sql-mcp --dsn sqlite:///tmp/example.db
 
 ## Docker
 
-Run the published multi-architecture image:
+Run the Docker Hub image:
 
 ```bash
 docker run --rm -p 8088:8088 \
@@ -49,7 +49,7 @@ docker run --rm -p 8088:8088 \
   longkeyy/sqlx-mcp-server:latest
 ```
 
-The image is published for `linux/amd64` and `linux/arm64`.
+The Dockerfile supports multi-architecture images for `linux/amd64` and `linux/arm64`.
 
 Start the default Docker Compose service:
 
