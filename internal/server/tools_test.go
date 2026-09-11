@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/longkeyy/sqlx-mcp-server/internal/config"
@@ -131,6 +132,16 @@ func TestSQLiteToolHandlersUseInstanceConnection(t *testing.T) {
 	decodeToolJSON(t, resultB, &listB)
 	if !hasObject(listB.Objects, "only_b") || hasObject(listB.Objects, "only_a") {
 		t.Fatalf("expected appB to see only only_b, got %+v", listB.Objects)
+	}
+}
+
+func TestDatabaseDescriptionContextIncludesMemo(t *testing.T) {
+	desc := databaseDescriptionContext("reporting", "warehouse", "PostgreSQL", "16", "analytics and BI replica")
+	if !strings.Contains(desc, "Current database instance: reporting") {
+		t.Fatalf("expected instance id in description, got %q", desc)
+	}
+	if !strings.Contains(desc, "Instance memo: analytics and BI replica.") {
+		t.Fatalf("expected memo in description, got %q", desc)
 	}
 }
 

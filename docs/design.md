@@ -26,20 +26,24 @@ The supported object types are:
 
 The process connects to configured databases at startup from URL-style DSNs. Each active database connection and dialect is represented by an explicit server instance instead of broad package-level state.
 
-`DATABASE_URL` is the source of truth for the legacy/default target database and includes the database name or SQLite file path. `INSTANCE_NAME` only controls the MCP server display/logging name. `DB_NAME` is accepted only as a legacy alias for the instance name and should not be used in new deployments.
+`DB_URL` is the source of truth for the default target database and includes the database name or SQLite file path. `DB_NAME` controls the MCP server display/logging name for that default database. `DB_MEMO` is an optional short purpose note included in MCP tool descriptions.
 
 Multiple databases can be configured with Docker-friendly environment variables:
 
 ```text
-DATABASE_APP_URL=sqlite:///app/data/app.db
-DATABASE_REPORTING_URL=postgres://user:pass@host:5432/reporting
-DATABASE_EVENTS_URL=clickhouse://user:pass@clickhouse:9000/events
-DATABASE_OB_URL=oceanbase://user:pass@oceanbase:3306/app
-DATABASE_ROACH_URL=cockroach://user:pass@roach:26257/app
-DEFAULT_DATABASE=APP
+DB_APP_URL=sqlite:///app/data/app.db
+DB_APP_NAME=app-db
+DB_APP_MEMO=Primary application database
+DB_REPORTING_URL=postgres://user:pass@host:5432/reporting
+DB_REPORTING_NAME=reporting-db
+DB_REPORTING_MEMO=Analytics and BI replica
+DB_EVENTS_URL=clickhouse://user:pass@clickhouse:9000/events
+DB_OB_URL=oceanbase://user:pass@oceanbase:3306/app
+DB_ROACH_URL=cockroach://user:pass@roach:26257/app
+DEFAULT_DB=APP
 ```
 
-The middle token in `DATABASE_{ID}_URL` becomes the stable lowercase route id. `DATABASE_{ID}_NAME` is optional and controls the MCP server display name for that database. If `DEFAULT_DATABASE` is not set, `DATABASE_URL` is the default when present; otherwise the first configured id in sorted order is used.
+The middle token in `DB_{ID}_URL` becomes the stable lowercase route id. `DB_{ID}_NAME` is optional and controls the MCP server display name for that database. `DB_{ID}_MEMO` is optional and gives agents a plain-language purpose for that database. If `DEFAULT_DB` is not set, `DB_URL` is the default when present; otherwise the first configured id in sorted order is used.
 
 When `LISTEN` is set to a network address such as `:8088` or `127.0.0.1:8088`, the process starts an HTTP server and exposes these paths:
 
@@ -51,15 +55,15 @@ Each configured database has its own `database/sql` connection pool. Defaults ar
 Pool defaults can be set globally:
 
 ```text
-DATABASE_MAX_OPEN_CONNS=25
-DATABASE_MAX_IDLE_CONNS=1
+DB_MAX_OPEN_CONNS=25
+DB_MAX_IDLE_CONNS=1
 ```
 
 Individual databases can override them:
 
 ```text
-DATABASE_APP_MAX_OPEN_CONNS=10
-DATABASE_APP_MAX_IDLE_CONNS=1
+DB_APP_MAX_OPEN_CONNS=10
+DB_APP_MAX_IDLE_CONNS=1
 ```
 
 Supported database drivers:

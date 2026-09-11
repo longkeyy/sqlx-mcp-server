@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -16,6 +17,7 @@ import (
 type AppServer struct {
 	id        string
 	name      string
+	memo      string
 	db        *sql.DB
 	driver    dsn.Driver
 	dsnConfig *dsn.Config
@@ -36,6 +38,7 @@ func newAppServer(cfg config.DatabaseConfig) (*AppServer, error) {
 	app := &AppServer{
 		id:        cfg.ID,
 		name:      cfg.Name,
+		memo:      cfg.Memo,
 		db:        db,
 		driver:    dsnConfig.Driver,
 		dsnConfig: dsnConfig,
@@ -86,11 +89,12 @@ func (a *AppServer) buildMCPServer() *mcpserver.MCPServer {
 	dbName := a.getCurrentDatabase()
 	dbVersion := a.getDBVersion()
 	dialectName := a.getSQLDialectName()
+	currentDatabase := databaseDescriptionContext(a.id, dbName, dialectName, dbVersion, a.memo)
 
-	queryDesc := fmt.Sprintf("Execute a read-oriented SQL query (SELECT, WITH, EXPLAIN, SHOW, DESCRIBE). Results are returned as compact JSON with columns plus row arrays. Current database: %s (%s %s).", dbName, dialectName, dbVersion)
-	executeDesc := fmt.Sprintf("Execute a write operation: DML (INSERT/UPDATE/DELETE), DDL (CREATE/ALTER/DROP), or call a stored procedure. Current database: %s (%s %s).", dbName, dialectName, dbVersion)
-	listObjectsDesc := fmt.Sprintf("List database objects (tables, views, procedures, functions) as JSON object records. Current database: %s (%s %s).", dbName, dialectName, dbVersion)
-	describeDesc := fmt.Sprintf("Describe a database object (table, view, procedure, function) as JSON metadata. Current database: %s (%s %s).", dbName, dialectName, dbVersion)
+	queryDesc := fmt.Sprintf("Execute a read-oriented SQL query (SELECT, WITH, EXPLAIN, SHOW, DESCRIBE). Results are returned as compact JSON with columns plus row arrays. %s", currentDatabase)
+	executeDesc := fmt.Sprintf("Execute a write operation: DML (INSERT/UPDATE/DELETE), DDL (CREATE/ALTER/DROP), or call a stored procedure. %s", currentDatabase)
+	listObjectsDesc := fmt.Sprintf("List database objects (tables, views, procedures, functions) as JSON object records. %s", currentDatabase)
+	describeDesc := fmt.Sprintf("Describe a database object (table, view, procedure, function) as JSON metadata. %s", currentDatabase)
 
 	s.AddTool(queryTool(queryDesc), a.queryToolHandler)
 	s.AddTool(executeTool(executeDesc), a.executeToolHandler)
@@ -98,6 +102,14 @@ func (a *AppServer) buildMCPServer() *mcpserver.MCPServer {
 	s.AddTool(describeObjectTool(describeDesc), a.describeObjectToolHandler)
 
 	return s
+}
+
+func databaseDescriptionContext(instanceID, dbName, dialectName, dbVersion, memo string) string {
+	context := fmt.Sprintf("Current database instance: %s; database: %s (%s %s).", instanceID, dbName, dialectName, dbVersion)
+	if strings.TrimSpace(memo) != "" {
+		context += " Instance memo: " + strings.TrimSpace(memo) + "."
+	}
+	return context
 }
 
 func BuildAppServers(configs []config.DatabaseConfig) (map[string]*AppServer, error) {

@@ -33,8 +33,9 @@ RUN mkdir -p /app/data
 
 EXPOSE 8088
 
-ENV DATABASE_URL=sqlite://:memory:
-ENV INSTANCE_NAME=sql-mcp
+ENV DB_URL=sqlite://:memory:
+ENV DB_NAME=sql-mcp
+ENV DB_MEMO="Local scratch database for first-run testing"
 ENV LISTEN=:8088
 
 ENTRYPOINT ["/app/sql-mcp"]

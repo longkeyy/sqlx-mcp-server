@@ -21,7 +21,7 @@ The SQLite driver is `modernc.org/sqlite`, so SQLite builds can run with `CGO_EN
 Run with SQLite:
 
 ```bash
-DATABASE_URL=sqlite:///tmp/example.db \
+DB_URL=sqlite:///tmp/example.db \
 LISTEN=:8088 \
 go run ./cmd/sql-mcp
 ```
@@ -44,7 +44,9 @@ Run the Docker Hub image:
 
 ```bash
 docker run --rm -p 8088:8088 \
-  -e DATABASE_URL=sqlite://:memory: \
+  -e DB_URL=sqlite://:memory: \
+  -e DB_NAME=sql-mcp \
+  -e DB_MEMO="Local scratch database for first-run testing" \
   -e LISTEN=:8088 \
   longkeyy/sqlx-mcp-server:latest
 ```
@@ -64,12 +66,12 @@ By default, `docker-compose.yml` maps:
 http://localhost:8088/mcp
 ```
 
-The compose file uses `DATABASE_URL=sqlite://:memory:` by default and mounts `./data` to `/app/data` for local file-backed SQLite overrides.
+The compose file uses `DB_URL=sqlite://:memory:` by default and mounts `./data` to `/app/data` for local file-backed SQLite overrides.
 
-For a local SQLite file, use an ignored `docker-compose.override.yml` or export `DATABASE_URL` before starting Compose:
+For a local SQLite file, use an ignored `docker-compose.override.yml` or export `DB_URL` before starting Compose:
 
 ```bash
-DATABASE_URL=sqlite:///app/data/example.db docker compose up -d
+DB_URL=sqlite:///app/data/example.db docker compose up -d
 ```
 
 Publish a multi-architecture image:
@@ -95,12 +97,13 @@ cp .env.example .env
 
 | Option | Environment | Default | Description |
 | --- | --- | --- | --- |
-| `--dsn` | `DATABASE_URL` | none | Default database URL-style DSN. |
-| `--name` | `INSTANCE_NAME` | generated | MCP server display/logging name. |
+| `--dsn` | `DB_URL` | none | Default database URL-style DSN. |
+| `--name` | `DB_NAME` | generated | MCP server display/logging name. |
+| none | `DB_MEMO` | empty | Short purpose note included in MCP tool descriptions. |
 | `--listen` | `LISTEN` | empty | Network listen address for HTTP/SSE, such as `:8088` or `127.0.0.1:8088`. Empty uses stdio. |
 | `--auth-token` | `AUTH_TOKEN` | empty | Optional token for HTTP/SSE authentication. Empty disables built-in authentication. |
 
-`DB_NAME` is still accepted as a legacy alias for `INSTANCE_NAME`, but new deployments should use `INSTANCE_NAME`.
+Named database instances use the same pattern: `DB_{ID}_URL`, optional `DB_{ID}_NAME`, and optional `DB_{ID}_MEMO`.
 
 ### DSN Formats
 
@@ -127,18 +130,22 @@ MySQL-compatible databases reuse the MySQL Go driver internally while keeping th
 
 ## Multi-Database Routing
 
-Use `DATABASE_{ID}_URL` variables to expose multiple databases from one process:
+Use `DB_{ID}_URL` variables to expose multiple databases from one process:
 
 ```env
-DATABASE_APP_URL=sqlite:///app/data/app.db
-DATABASE_REPORTING_URL=postgres://user:pass@host:5432/reporting
-DATABASE_EVENTS_URL=clickhouse://user:pass@clickhouse:9000/events
-DATABASE_OB_URL=oceanbase://user:pass@oceanbase:3306/app
-DATABASE_ROACH_URL=cockroach://user:pass@roach:26257/app
-DEFAULT_DATABASE=APP
+DB_APP_URL=sqlite:///app/data/app.db
+DB_APP_NAME=app-db
+DB_APP_MEMO=Primary application database
+DB_REPORTING_URL=postgres://user:pass@host:5432/reporting
+DB_REPORTING_NAME=reporting-db
+DB_REPORTING_MEMO=Analytics and BI replica
+DB_EVENTS_URL=clickhouse://user:pass@clickhouse:9000/events
+DB_OB_URL=oceanbase://user:pass@oceanbase:3306/app
+DB_ROACH_URL=cockroach://user:pass@roach:26257/app
+DEFAULT_DB=APP
 ```
 
-The `{ID}` part becomes the lowercase route id. For example, `DATABASE_REPORTING_URL` becomes `reporting`.
+The `{ID}` part becomes the lowercase route id. For example, `DB_REPORTING_URL` becomes `reporting`.
 
 Routes:
 
@@ -155,14 +162,18 @@ Routes:
 
 Set `LISTEN` to expose Streamable HTTP and SSE routes on the same port. Leave it empty to use stdio.
 
-Optional display names:
+Optional display names and memos:
 
 ```env
-DATABASE_APP_NAME=app-db
-DATABASE_REPORTING_NAME=reporting-db
+DB_APP_NAME=app-db
+DB_APP_MEMO=Primary application database
+DB_REPORTING_NAME=reporting-db
+DB_REPORTING_MEMO=Analytics and BI replica
 ```
 
-If `DEFAULT_DATABASE` is not set, `DATABASE_URL` is used as the default when present. Otherwise, the first configured database id in sorted order is used.
+`DB_MEMO` and `DB_{ID}_MEMO` are included in MCP tool descriptions so agents can distinguish similarly named database instances before they call a tool.
+
+If `DEFAULT_DB` is not set, `DB_URL` is used as the default when present. Otherwise, the first configured database id in sorted order is used.
 
 ## Connection Pool Settings
 
@@ -171,15 +182,15 @@ Each configured database has its own `database/sql` connection pool.
 Global defaults:
 
 ```env
-DATABASE_MAX_OPEN_CONNS=25
-DATABASE_MAX_IDLE_CONNS=1
+DB_MAX_OPEN_CONNS=25
+DB_MAX_IDLE_CONNS=1
 ```
 
 Per-database overrides:
 
 ```env
-DATABASE_APP_MAX_OPEN_CONNS=10
-DATABASE_APP_MAX_IDLE_CONNS=1
+DB_APP_MAX_OPEN_CONNS=10
+DB_APP_MAX_IDLE_CONNS=1
 ```
 
 The default idle connection count is intentionally low because MCP SQL access is often low-frequency.
@@ -300,7 +311,7 @@ Arguments:
 
 The `query` tool includes a read-oriented SQL guardrail, but it is not a complete security boundary. Use database users with the least privileges required for your deployment.
 
-Remote HTTP deployments should be protected by authentication, a trusted reverse proxy, VPN, or network policy. This server does not currently implement built-in authentication.
+Remote HTTP deployments should be protected by `AUTH_TOKEN`, a trusted reverse proxy, VPN, or network policy.
 
 ## Design
 
@@ -313,7 +324,7 @@ The server creates one runtime instance per configured database. Each instance o
 - A parsed URL-style DSN.
 - A dedicated `database/sql` connection pool.
 - A database dialect.
-- An MCP server with tool descriptions generated from that database.
+- An MCP server with tool descriptions generated from that database, including the configured memo when present.
 
 For multi-database deployments, the URL path selects the database instance. Tool calls do not include a database selector argument, which keeps each MCP session scoped to one database and reduces the chance of an LLM accidentally querying the wrong database.
 

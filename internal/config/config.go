@@ -17,17 +17,17 @@ const (
 	defaultMaxOpenConns = 25
 	defaultMaxIdleConns = 1
 
-	envDatabaseURL          = "DATABASE_URL"
-	envDefaultDatabase      = "DEFAULT_DATABASE"
-	envInstanceName         = "INSTANCE_NAME"
-	envLegacyDBName         = "DB_NAME"
+	envDatabaseURL          = "DB_URL"
+	envDatabaseName         = "DB_NAME"
+	envDatabaseMemo         = "DB_MEMO"
+	envDefaultDatabase      = "DEFAULT_DB"
 	envListen               = "LISTEN"
 	envAuthToken            = "AUTH_TOKEN"
-	envDatabaseMaxOpenConns = "DATABASE_MAX_OPEN_CONNS"
-	envDatabaseMaxIdleConns = "DATABASE_MAX_IDLE_CONNS"
+	envDatabaseMaxOpenConns = "DB_MAX_OPEN_CONNS"
+	envDatabaseMaxIdleConns = "DB_MAX_IDLE_CONNS"
 )
 
-var databaseURLEnvPattern = regexp.MustCompile(`^DATABASE_(.+)_URL$`)
+var databaseURLEnvPattern = regexp.MustCompile(`^DB_(.+)_URL$`)
 
 // AppConfig holds the application configuration
 type AppConfig struct {
@@ -42,6 +42,7 @@ type AppConfig struct {
 type DatabaseConfig struct {
 	ID           string
 	Name         string
+	Memo         string
 	DSN          string
 	MaxOpenConns int
 	MaxIdleConns int
@@ -73,19 +74,17 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 		return value, ok
 	}
 
-	// DSN priority: --dsn flag > DATABASE_URL env
+	// DSN priority: --dsn flag > DB_URL env
 	if *dsn != "" {
 		config.DSN = *dsn
 	} else if envDSN, ok := lookupEnv(envDatabaseURL); ok && envDSN != "" {
 		config.DSN = envDSN
 	}
 
-	// Instance name priority: --name flag > INSTANCE_NAME env > DB_NAME legacy env
+	// Instance name priority: --name flag > DB_NAME env
 	if *name != "" {
 		config.Name = *name
-	} else if envName, ok := lookupEnv(envInstanceName); ok && envName != "" {
-		config.Name = envName
-	} else if envName, ok := lookupEnv(envLegacyDBName); ok && envName != "" {
+	} else if envName, ok := lookupEnv(envDatabaseName); ok && envName != "" {
 		config.Name = envName
 	}
 
@@ -100,7 +99,7 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 		config.AuthToken = strings.TrimSpace(envAuthToken)
 	}
 
-	databases, defaultDatabase, err := parseDatabaseConfigs(config.DSN, config.Name, env)
+	databases, defaultDatabase, err := parseDatabaseConfigs(config.DSN, config.Name, strings.TrimSpace(env[envDatabaseMemo]), env)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +115,7 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 	return config, nil
 }
 
-func parseDatabaseConfigs(legacyDSN, legacyName string, env map[string]string) ([]DatabaseConfig, string, error) {
+func parseDatabaseConfigs(defaultDSN, defaultName, defaultMemo string, env map[string]string) ([]DatabaseConfig, string, error) {
 	databasesByID := map[string]DatabaseConfig{}
 	var ids []string
 	globalPool, err := parsePoolConfig(env, "")
@@ -124,8 +123,8 @@ func parseDatabaseConfigs(legacyDSN, legacyName string, env map[string]string) (
 		return nil, "", err
 	}
 
-	if legacyDSN != "" {
-		name := legacyName
+	if defaultDSN != "" {
+		name := defaultName
 		if name == "" {
 			name = "sql-mcp-default"
 		}
@@ -142,7 +141,8 @@ func parseDatabaseConfigs(legacyDSN, legacyName string, env map[string]string) (
 		databasesByID[defaultDatabaseID] = DatabaseConfig{
 			ID:           defaultDatabaseID,
 			Name:         name,
-			DSN:          legacyDSN,
+			Memo:         defaultMemo,
+			DSN:          defaultDSN,
 			MaxOpenConns: pool.maxOpen,
 			MaxIdleConns: pool.maxIdle,
 		}
@@ -166,16 +166,17 @@ func parseDatabaseConfigs(legacyDSN, legacyName string, env map[string]string) (
 			return nil, "", fmt.Errorf("invalid database env %s: %w", key, err)
 		}
 		if id == defaultDatabaseID {
-			return nil, "", fmt.Errorf("%s is reserved; use DATABASE_URL for the default database", key)
+			return nil, "", fmt.Errorf("%s is reserved; use DB_URL for the default database", key)
 		}
 		dsn := strings.TrimSpace(env[key])
 		if dsn == "" {
 			continue
 		}
-		name := strings.TrimSpace(env[fmt.Sprintf("DATABASE_%s_NAME", rawID)])
+		name := strings.TrimSpace(env[fmt.Sprintf("DB_%s_NAME", rawID)])
 		if name == "" {
 			name = "sql-mcp-" + id
 		}
+		memo := strings.TrimSpace(env[fmt.Sprintf("DB_%s_MEMO", rawID)])
 		pool, err := parsePoolConfig(env, rawID)
 		if err != nil {
 			return nil, "", err
@@ -193,6 +194,7 @@ func parseDatabaseConfigs(legacyDSN, legacyName string, env map[string]string) (
 		databasesByID[id] = DatabaseConfig{
 			ID:           id,
 			Name:         name,
+			Memo:         memo,
 			DSN:          dsn,
 			MaxOpenConns: pool.maxOpen,
 			MaxIdleConns: pool.maxIdle,
@@ -201,7 +203,7 @@ func parseDatabaseConfigs(legacyDSN, legacyName string, env map[string]string) (
 
 	sort.Strings(ids)
 	if len(ids) == 0 {
-		return nil, "", fmt.Errorf("DSN is required. Use --dsn, DATABASE_URL, or DATABASE_{ID}_URL environment variables.\n" +
+		return nil, "", fmt.Errorf("DSN is required. Use --dsn, DB_URL, or DB_{ID}_URL environment variables.\n" +
 			"Supported formats:\n" +
 			"  mysql://user:pass@host:3306/dbname\n" +
 			"  mariadb://user:pass@host:3306/dbname\n" +
@@ -221,10 +223,10 @@ func parseDatabaseConfigs(legacyDSN, legacyName string, env map[string]string) (
 	if rawDefault := strings.TrimSpace(env[envDefaultDatabase]); rawDefault != "" {
 		normalized, err := normalizeDatabaseID(rawDefault)
 		if err != nil {
-			return nil, "", fmt.Errorf("invalid DEFAULT_DATABASE: %w", err)
+			return nil, "", fmt.Errorf("invalid DEFAULT_DB: %w", err)
 		}
 		if _, exists := databasesByID[normalized]; !exists {
-			return nil, "", fmt.Errorf("DEFAULT_DATABASE %q does not match any configured database", rawDefault)
+			return nil, "", fmt.Errorf("DEFAULT_DB %q does not match any configured database", rawDefault)
 		}
 		defaultID = normalized
 	} else if _, exists := databasesByID[defaultDatabaseID]; exists {
@@ -256,8 +258,8 @@ func parsePoolConfig(env map[string]string, rawID string) (poolConfig, error) {
 	openKey := envDatabaseMaxOpenConns
 	idleKey := envDatabaseMaxIdleConns
 	if rawID != "" {
-		openKey = fmt.Sprintf("DATABASE_%s_MAX_OPEN_CONNS", rawID)
-		idleKey = fmt.Sprintf("DATABASE_%s_MAX_IDLE_CONNS", rawID)
+		openKey = fmt.Sprintf("DB_%s_MAX_OPEN_CONNS", rawID)
+		idleKey = fmt.Sprintf("DB_%s_MAX_IDLE_CONNS", rawID)
 	}
 
 	if value, ok := env[openKey]; ok && strings.TrimSpace(value) != "" {
