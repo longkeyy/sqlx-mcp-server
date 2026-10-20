@@ -27,12 +27,12 @@ type AppServer struct {
 func newAppServer(cfg config.DatabaseConfig) (*AppServer, error) {
 	dsnConfig, err := dsn.Parse(cfg.DSN)
 	if err != nil {
-		return nil, fmt.Errorf("invalid DSN for database %q: %w", cfg.ID, err)
+		return nil, fmt.Errorf("invalid DSN for database %q: %w", cfg.ID, dsn.RedactError(err, cfg.DSN))
 	}
 
 	db, err := openConnectionPool(dsnConfig, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("database %q connection failed: %w", cfg.ID, err)
+		return nil, fmt.Errorf("database %q connection failed: %w", cfg.ID, dsn.RedactError(err, cfg.DSN))
 	}
 
 	app := &AppServer{
@@ -44,7 +44,7 @@ func newAppServer(cfg config.DatabaseConfig) (*AppServer, error) {
 		dsnConfig: dsnConfig,
 	}
 	app.mcpServer = app.buildMCPServer()
-	log.Printf("Successfully connected to database %q (%s): %s", app.id, app.driver, config.MaskDSN(dsnConfig.RawDSN))
+	log.Printf("Successfully connected to database %q (%s): %s", app.id, app.driver, dsn.Mask(dsnConfig.RawDSN))
 	return app, nil
 }
 

@@ -151,6 +151,8 @@ clickhouse://user:pass@host:9000/dbname
 
 MySQL-compatible databases reuse the MySQL Go driver internally while keeping their own dialect names in tool descriptions and results. PostgreSQL-compatible databases reuse the PostgreSQL driver in the same way. ClickHouse uses the official ClickHouse Go driver.
 
+DSNs are never logged in clear text: the startup log masks the password and any credential query parameter (`password`, `token`, `secret`, and similar), and startup errors are scrubbed of the DSN, its password, and those values before they are printed.
+
 ## Multi-Database Routing
 
 Use `DB_{ID}_URL` variables to expose multiple databases from one process:

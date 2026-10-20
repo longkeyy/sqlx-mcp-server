@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/longkeyy/sqlx-mcp-server/internal/dsn"
 )
 
 const (
@@ -288,26 +290,9 @@ func envMapFromOS() map[string]string {
 	return env
 }
 
-// MaskDSN masks sensitive information in DSN for logging
-func MaskDSN(dsn string) string {
-	if dsn == "" {
-		return ""
-	}
-
-	// Try to mask password in URL format
-	for _, prefix := range []string{"mysql://", "mariadb://", "percona://", "tidb://", "doris://", "oceanbase://", "starrocks://", "postgres://", "postgresql://", "cockroach://", "greenplum://", "opengauss://", "mogdb://", "sqlserver://", "clickhouse://"} {
-		if strings.HasPrefix(dsn, prefix) {
-			parts := strings.SplitN(dsn[len(prefix):], "@", 2)
-			if len(parts) == 2 {
-				creds := parts[0]
-				if idx := strings.Index(creds, ":"); idx != -1 {
-					creds = creds[:idx] + ":***"
-				}
-				return prefix + creds + "@" + parts[1]
-			}
-		}
-	}
-
-	// For SQLite, just return as-is
-	return dsn
+// MaskDSN masks sensitive information in a DSN for logging.
+//
+// Deprecated: use dsn.Mask, which also masks credential query parameters.
+func MaskDSN(raw string) string {
+	return dsn.Mask(raw)
 }

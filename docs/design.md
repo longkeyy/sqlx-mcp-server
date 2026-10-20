@@ -24,7 +24,7 @@ The supported object types are:
 
 ## Runtime Model
 
-The process connects to configured databases at startup from URL-style DSNs. Each active database connection and dialect is represented by an explicit server instance instead of broad package-level state.
+The process connects to configured databases at startup from URL-style DSNs. Each active database connection and dialect is represented by an explicit server instance instead of broad package-level state. DSNs are credentials: the startup log prints them with the password and credential query parameters masked, parse errors report only that the URL is malformed, and connection errors are scrubbed of the DSN, its password, and credential query values before they are logged. Connection strings reach the drivers unchanged; masking applies only to output.
 
 `DB_URL` is the source of truth for the default target database and includes the database name or SQLite file path. `DB_NAME` controls the MCP server display/logging name for that default database. `DB_MEMO` is an optional short purpose note included in MCP tool descriptions.
 

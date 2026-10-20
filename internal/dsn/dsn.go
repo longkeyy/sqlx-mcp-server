@@ -67,10 +67,11 @@ func Parse(dsn string) (*Config, error) {
 		return nil, fmt.Errorf("unsupported DSN scheme, supported: mysql://, mariadb://, percona://, tidb://, doris://, oceanbase://, starrocks://, postgres://, postgresql://, cockroach://, greenplum://, opengauss://, mogdb://, sqlite://, sqlserver://, clickhouse://")
 	}
 
-	// Parse as URL
+	// Parse as URL. The error is replaced rather than wrapped: url.Error embeds
+	// the offending input, which is the raw DSN and may contain a password.
 	u, err := url.Parse(dsnWithoutScheme)
 	if err != nil {
-		return nil, fmt.Errorf("invalid DSN: %w", err)
+		return nil, fmt.Errorf("invalid DSN: malformed URL (check that special characters in the username or password are percent-encoded)")
 	}
 
 	config := &Config{
