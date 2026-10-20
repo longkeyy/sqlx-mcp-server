@@ -30,6 +30,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// Warnings go to stderr; stdout is reserved for JSON-RPC in stdio mode.
+	for _, warning := range cfg.Warnings {
+		log.Printf("config warning: %s", warning)
+	}
 
 	apps, err := sqlmcp.BuildAppServers(cfg.Databases)
 	if err != nil {

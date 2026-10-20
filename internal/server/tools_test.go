@@ -140,8 +140,15 @@ func TestDatabaseDescriptionContextIncludesMemo(t *testing.T) {
 	if !strings.Contains(desc, "Current database instance: reporting") {
 		t.Fatalf("expected instance id in description, got %q", desc)
 	}
-	if !strings.Contains(desc, "Instance memo: analytics and BI replica.") {
-		t.Fatalf("expected memo in description, got %q", desc)
+	if !strings.Contains(desc, `Instance memo: "analytics and BI replica".`) {
+		t.Fatalf("expected the quoted memo in description, got %q", desc)
+	}
+}
+
+func TestDatabaseDescriptionContextEscapesMemo(t *testing.T) {
+	desc := databaseDescriptionContext("reporting", "warehouse", "PostgreSQL", "16", "say \"hi\"\nnow")
+	if !strings.Contains(desc, `Instance memo: "say \"hi\"\nnow".`) {
+		t.Fatalf("expected the memo to be escaped, got %q", desc)
 	}
 }
 

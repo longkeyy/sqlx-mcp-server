@@ -40,14 +40,17 @@ go run ./cmd/sql-mcp --dsn sqlite:///tmp/example.db
 
 ## Docker
 
-Run the Docker Hub image:
+The image does not contain a default DSN. Supply one with `DB_URL` or one or more `DB_{ID}_URL` variables; without it the container exits with a "DSN is required" error instead of silently opening a scratch database.
+
+Run the Docker Hub image with a persistent SQLite file:
 
 ```bash
+mkdir -p data
 docker run --rm -p 8088:8088 \
-  -e DB_URL=sqlite://:memory: \
+  -e DB_URL=sqlite:///app/data/sql-mcp.db \
   -e DB_NAME=sql-mcp \
-  -e DB_MEMO="Local scratch database for first-run testing" \
   -e LISTEN=:8088 \
+  -v "$PWD/data:/app/data" \
   longkeyy/sqlx-mcp-server:latest
 ```
 
@@ -66,13 +69,17 @@ By default, `docker-compose.yml` maps:
 http://localhost:8088/mcp
 ```
 
-The compose file uses `DB_URL=sqlite://:memory:` by default and mounts `./data` to `/app/data` for local file-backed SQLite overrides.
+The compose file defaults `DB_URL` to `sqlite:///app/data/sql-mcp.db` and mounts `./data` to `/app/data`, so the database survives container restarts.
 
-For a local SQLite file, use an ignored `docker-compose.override.yml` or export `DB_URL` before starting Compose:
+To use another database, export `DB_URL` before starting Compose or put it in `.env`:
 
 ```bash
-DB_URL=sqlite:///app/data/example.db docker compose up -d
+DB_URL=postgres://user:pass@host:5432/app docker compose up -d
 ```
+
+Set `DB_URL=` explicitly (empty value) to drop the SQLite default and serve only `DB_{ID}_URL` databases. Compose still forwards the legacy `DATABASE_URL`, `INSTANCE_NAME`, and `DEFAULT_DATABASE` variables to their current names.
+
+Compose always forwards `DB_NAME=sql-mcp`. It names the default database when only one `DB_{ID}_URL` database is served, or when `DEFAULT_DB` is set. With several databases and no `DEFAULT_DB`, startup warns that `DB_NAME` was not applied; set `DEFAULT_DB` or `DB_{ID}_NAME` to silence it.
 
 Publish a multi-architecture image:
 
@@ -98,12 +105,36 @@ cp .env.example .env
 | Option | Environment | Default | Description |
 | --- | --- | --- | --- |
 | `--dsn` | `DB_URL` | none | Default database URL-style DSN. |
-| `--name` | `DB_NAME` | generated | MCP server display/logging name. |
-| none | `DB_MEMO` | empty | Short purpose note included in MCP tool descriptions. |
+| `--name` | `DB_NAME` | generated | MCP server display/logging name. Also names the default database when `DB_URL` is not set. |
+| none | `DB_MEMO` | empty | Short purpose note included in MCP tool descriptions. Also describes the default database when `DB_URL` is not set. |
 | `--listen` | `LISTEN` | empty | Network listen address for HTTP/SSE, such as `:8088` or `127.0.0.1:8088`. Empty uses stdio. |
 | `--auth-token` | `AUTH_TOKEN` | empty | Optional token for HTTP/SSE authentication. Empty disables built-in authentication. |
 
 Named database instances use the same pattern: `DB_{ID}_URL`, optional `DB_{ID}_NAME`, and optional `DB_{ID}_MEMO`.
+
+The `{ID}` token is matched case-insensitively across all `DB_{ID}_*` keys, so `DB_APP_URL` pairs with `DB_app_NAME` and `DB_aPp_MAX_OPEN_CONNS`. Two spellings of one id are the same setting: equal values are accepted with a warning, and different values fail startup.
+
+A `DB_{ID}_URL` (or `DATABASE_{ID}_URL`) set to an `http://` or `https://` address is not a database URL, so it is skipped with a warning instead of failing the process. This keeps API or health-check variables that share the prefix from breaking the databases that are configured. The global `DB_URL` is not filtered: an http(s) value there fails startup like any other unsupported scheme.
+
+### Legacy environment variable names
+
+Variables from releases before the `DB_*` rename are still accepted, so an existing deployment does not silently lose a database after an upgrade. Every use logs a deprecation warning on stderr.
+
+| Deprecated | Current |
+| --- | --- |
+| `DATABASE_URL` | `DB_URL` |
+| `DATABASE_{ID}_URL` | `DB_{ID}_URL` |
+| `DATABASE_{ID}_NAME`, `DATABASE_{ID}_MEMO` | `DB_{ID}_NAME`, `DB_{ID}_MEMO` |
+| `DATABASE_MAX_OPEN_CONNS`, `DATABASE_MAX_IDLE_CONNS` | `DB_MAX_OPEN_CONNS`, `DB_MAX_IDLE_CONNS` |
+| `DATABASE_{ID}_MAX_OPEN_CONNS`, `DATABASE_{ID}_MAX_IDLE_CONNS` | `DB_{ID}_MAX_OPEN_CONNS`, `DB_{ID}_MAX_IDLE_CONNS` |
+| `INSTANCE_NAME` | `DB_NAME` |
+| `DEFAULT_DATABASE` | `DEFAULT_DB` |
+
+Only the deprecated name set: it is used, with a warning. Both set to the same value: the current name is used, with a warning. Both set to different values: startup fails with an error naming both keys; DSNs are never printed. `INSTANCE_NAME` is the exception and still wins over `DB_NAME` for compatibility, with a warning. Per-database display settings (`*_NAME`, `*_MEMO`) prefer the current key on a conflict and warn.
+
+Per-database settings are also matched to their `*_URL` key by id regardless of case. A setting for an id that has no URL is ignored with a warning instead of silently doing nothing. `DB_DEFAULT_MAX_*` configures the default database; `DB_DEFAULT_NAME` and `DB_DEFAULT_MEMO` are not used and warn, because the default database's name and memo come from `DB_NAME` and `DB_MEMO`.
+
+Warnings are written to stderr, so stdio output stays valid JSON-RPC.
 
 ### DSN Formats
 
@@ -128,6 +159,8 @@ clickhouse://user:pass@host:9000/dbname
 
 MySQL-compatible databases reuse the MySQL Go driver internally while keeping their own dialect names in tool descriptions and results. PostgreSQL-compatible databases reuse the PostgreSQL driver in the same way. ClickHouse uses the official ClickHouse Go driver.
 
+DSNs are never logged in clear text: the startup log masks the password and any credential query parameter (`password`, `token`, `secret`, and similar), and startup errors are scrubbed of the DSN, its password, and those values before they are printed.
+
 ## Multi-Database Routing
 
 Use `DB_{ID}_URL` variables to expose multiple databases from one process:
@@ -145,7 +178,7 @@ DB_ROACH_URL=cockroach://user:pass@roach:26257/app
 DEFAULT_DB=APP
 ```
 
-The `{ID}` part becomes the lowercase route id. For example, `DB_REPORTING_URL` becomes `reporting`.
+The `{ID}` part becomes the lowercase route id. For example, `DB_REPORTING_URL` becomes `reporting`. Id matching is case-insensitive, so `DB_reporting_MEMO` applies to the same database.
 
 Routes:
 
@@ -171,9 +204,11 @@ DB_REPORTING_NAME=reporting-db
 DB_REPORTING_MEMO=Analytics and BI replica
 ```
 
-`DB_MEMO` and `DB_{ID}_MEMO` are included in MCP tool descriptions so agents can distinguish similarly named database instances before they call a tool.
+`DB_MEMO` and `DB_{ID}_MEMO` are included in MCP tool descriptions so agents can distinguish similarly named database instances before they call a tool. The value is rendered as quoted text: startup collapses it to a single line, strips control characters, and caps it at 200 characters with an ellipsis, warning with the variable name when it changes anything.
 
-If `DEFAULT_DB` is not set, `DB_URL` is used as the default when present. Otherwise, the first configured database id in sorted order is used.
+If `DB_URL` is not set, the default database is one of the named databases, so `DB_NAME` and `DB_MEMO` also name and describe it. They apply when `DEFAULT_DB` selects the database, or when it is the only configured database. `DB_{ID}_NAME` and `DB_{ID}_MEMO` always win over them. When several databases are configured without `DEFAULT_DB`, nothing says which one the global values describe, so they are not applied and a warning asks for `DEFAULT_DB` or the per-id keys.
+
+If `DEFAULT_DB` is not set, `DB_URL` is used as the default when present. Otherwise, the first configured database id in sorted order is used; when more than one database is configured this logs a warning naming the chosen id.
 
 ## Connection Pool Settings
 
@@ -191,6 +226,14 @@ Per-database overrides:
 ```env
 DB_APP_MAX_OPEN_CONNS=10
 DB_APP_MAX_IDLE_CONNS=1
+```
+
+The default database from `DB_URL` uses the id `default`, so `DB_DEFAULT_MAX_OPEN_CONNS` and `DB_DEFAULT_MAX_IDLE_CONNS` override its pool.
+
+Limits resolve as per-database key, then global key, then built-in default. Startup fails if a database's effective idle limit exceeds its effective open limit, and the error names the key, or the built-in default, that supplied each limit:
+
+```text
+database "app": max idle connections 40 (DB_APP_MAX_IDLE_CONNS) exceeds max open connections 10 (DB_MAX_OPEN_CONNS)
 ```
 
 The default idle connection count is intentionally low because MCP SQL access is often low-frequency.

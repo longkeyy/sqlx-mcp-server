@@ -24,9 +24,15 @@ The supported object types are:
 
 ## Runtime Model
 
-The process connects to configured databases at startup from URL-style DSNs. Each active database connection and dialect is represented by an explicit server instance instead of broad package-level state.
+The process connects to configured databases at startup from URL-style DSNs. Each active database connection and dialect is represented by an explicit server instance instead of broad package-level state. DSNs are credentials: the startup log prints them with the password and credential query parameters masked, parse errors report only that the URL is malformed, and connection errors are scrubbed of the DSN, its password, and credential query values before they are logged. Connection strings reach the drivers unchanged; masking applies only to output.
 
 `DB_URL` is the source of truth for the default target database and includes the database name or SQLite file path. `DB_NAME` controls the MCP server display/logging name for that default database. `DB_MEMO` is an optional short purpose note included in MCP tool descriptions.
+
+Memos reach the model inside a sentence, so configuration normalizes them: control characters and line breaks become spaces, runs of whitespace collapse, and the result is capped at 200 runes with an ellipsis. A warning names the variable that supplied the value when anything changes. Tool descriptions render the memo with Go string quoting, so embedded quotes and backslashes stay data rather than punctuation.
+
+Without `DB_URL` the default database is one of the named `DB_{ID}_URL` databases, so `DB_NAME` and `DB_MEMO` describe that database too. They apply when `DEFAULT_DB` selects it or when it is the only database; `DB_{ID}_NAME` and `DB_{ID}_MEMO` take precedence. When several databases exist and the default was chosen implicitly, the global values cannot be attributed to any of them, so they are reported as unused and a warning names the key that would fix it.
+
+Neither the binary nor the Docker image has a built-in DSN; both refuse to start without one. Only the Compose file supplies a default: a persistent SQLite file under the mounted `./data` directory.
 
 Multiple databases can be configured with Docker-friendly environment variables:
 
@@ -43,7 +49,9 @@ DB_ROACH_URL=cockroach://user:pass@roach:26257/app
 DEFAULT_DB=APP
 ```
 
-The middle token in `DB_{ID}_URL` becomes the stable lowercase route id. `DB_{ID}_NAME` is optional and controls the MCP server display name for that database. `DB_{ID}_MEMO` is optional and gives agents a plain-language purpose for that database. If `DEFAULT_DB` is not set, `DB_URL` is the default when present; otherwise the first configured id in sorted order is used.
+The middle token in `DB_{ID}_URL` becomes the stable lowercase route id, matched case-insensitively across the `DB_{ID}_*` keys, so `DB_APP_URL`, `DB_app_NAME` and `DB_aPp_MAX_OPEN_CONNS` configure one database. Duplicate spellings of an id with equal trimmed values are accepted with a warning; different values fail startup with an error naming both keys. Settings for an id without a URL warn instead of being silently ignored, and `DB_DEFAULT_NAME`/`DB_DEFAULT_MEMO` warn because the default database uses the global `DB_NAME`/`DB_MEMO`; `DB_DEFAULT_MAX_*` does apply to the default database. A `DB_{ID}_URL` set to an `http(s)://` address is skipped with a warning: such keys are usually API or health-check settings that share the prefix, and they should not stop the process. Only http(s) is filtered; every other scheme is parsed at startup so a typo still fails. `DB_{ID}_NAME` is optional and controls the MCP server display name for that database. `DB_{ID}_MEMO` is optional and gives agents a plain-language purpose for that database. If `DEFAULT_DB` is not set, `DB_URL` is the default when present; otherwise the first configured id in sorted order is used, which is logged as a warning when several databases are configured.
+
+Names from before the `DB_*` rename are kept as deprecated aliases (`DATABASE_URL`, `DATABASE_{ID}_URL`, `DATABASE_{ID}_NAME`, `DATABASE_{ID}_MEMO`, `DATABASE_MAX_*`, `DATABASE_{ID}_MAX_*`, `INSTANCE_NAME`, `DEFAULT_DATABASE`) so an upgrade does not silently drop configuration. Resolution treats blank values as unset and compares aliases after trimming: a value present only under the deprecated name is used with a warning, equal duplicates warn, and conflicting non-display values fail startup with an error naming both keys but never the values, since values may contain credentials. Display-only settings (server and database names, memos) resolve a conflict in favor of the current key with a warning; `INSTANCE_NAME` keeps winning over `DB_NAME` for compatibility. Warnings are written to stderr so stdio stdout carries only JSON-RPC.
 
 When `LISTEN` is set to a network address such as `:8088` or `127.0.0.1:8088`, the process starts an HTTP server and exposes these paths:
 
@@ -65,6 +73,8 @@ Individual databases can override them:
 DB_APP_MAX_OPEN_CONNS=10
 DB_APP_MAX_IDLE_CONNS=1
 ```
+
+Limits resolve per database as per-id key, then global key, then built-in default, and validation runs on the resolved pair. A per-id idle limit may therefore exceed the built-in open limit when `DB_MAX_OPEN_CONNS` raises it. An idle limit above the effective open limit fails startup with an error naming the database and the key, or the built-in default, that supplied each side.
 
 Supported database drivers:
 

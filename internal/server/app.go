@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,12 +28,12 @@ type AppServer struct {
 func newAppServer(cfg config.DatabaseConfig) (*AppServer, error) {
 	dsnConfig, err := dsn.Parse(cfg.DSN)
 	if err != nil {
-		return nil, fmt.Errorf("invalid DSN for database %q: %w", cfg.ID, err)
+		return nil, fmt.Errorf("invalid DSN for database %q: %w", cfg.ID, dsn.RedactError(err, cfg.DSN))
 	}
 
 	db, err := openConnectionPool(dsnConfig, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("database %q connection failed: %w", cfg.ID, err)
+		return nil, fmt.Errorf("database %q connection failed: %w", cfg.ID, dsn.RedactError(err, cfg.DSN))
 	}
 
 	app := &AppServer{
@@ -44,7 +45,7 @@ func newAppServer(cfg config.DatabaseConfig) (*AppServer, error) {
 		dsnConfig: dsnConfig,
 	}
 	app.mcpServer = app.buildMCPServer()
-	log.Printf("Successfully connected to database %q (%s): %s", app.id, app.driver, config.MaskDSN(dsnConfig.RawDSN))
+	log.Printf("Successfully connected to database %q (%s): %s", app.id, app.driver, dsn.Mask(dsnConfig.RawDSN))
 	return app, nil
 }
 
@@ -107,7 +108,11 @@ func (a *AppServer) buildMCPServer() *mcpserver.MCPServer {
 func databaseDescriptionContext(instanceID, dbName, dialectName, dbVersion, memo string) string {
 	context := fmt.Sprintf("Current database instance: %s; database: %s (%s %s).", instanceID, dbName, dialectName, dbVersion)
 	if strings.TrimSpace(memo) != "" {
-		context += " Instance memo: " + strings.TrimSpace(memo) + "."
+		// Quote the memo so it reads as data: embedded quotes, backslashes and
+		// any remaining control characters are escaped instead of breaking the
+		// surrounding description. Config normalizes memos to one line, but the
+		// description is built from whatever the caller passed in.
+		context += " Instance memo: " + strconv.Quote(strings.TrimSpace(memo)) + "."
 	}
 	return context
 }
