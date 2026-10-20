@@ -126,7 +126,7 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 		dsn:        config.DSN,
 		name:       config.Name,
 		nameKey:    nameKey,
-		memo:       resolver.trim(envDatabaseMemo),
+		memo:       resolver.sanitizeMemoSetting(envDatabaseMemo, resolver.trim(envDatabaseMemo)),
 		rawDefault: defaultDatabase,
 	})
 	if err != nil {

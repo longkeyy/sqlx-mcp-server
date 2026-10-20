@@ -202,7 +202,7 @@ DB_REPORTING_NAME=reporting-db
 DB_REPORTING_MEMO=Analytics and BI replica
 ```
 
-`DB_MEMO` and `DB_{ID}_MEMO` are included in MCP tool descriptions so agents can distinguish similarly named database instances before they call a tool.
+`DB_MEMO` and `DB_{ID}_MEMO` are included in MCP tool descriptions so agents can distinguish similarly named database instances before they call a tool. The value is rendered as quoted text: startup collapses it to a single line, strips control characters, and caps it at 200 characters with an ellipsis, warning with the variable name when it changes anything.
 
 If `DB_URL` is not set, the default database is one of the named databases, so `DB_NAME` and `DB_MEMO` also name and describe it. They apply when `DEFAULT_DB` selects the database, or when it is the only configured database. `DB_{ID}_NAME` and `DB_{ID}_MEMO` always win over them. When several databases are configured without `DEFAULT_DB`, nothing says which one the global values describe, so they are not applied and a warning asks for `DEFAULT_DB` or the per-id keys.
 

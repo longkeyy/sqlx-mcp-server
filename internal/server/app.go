@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -107,7 +108,11 @@ func (a *AppServer) buildMCPServer() *mcpserver.MCPServer {
 func databaseDescriptionContext(instanceID, dbName, dialectName, dbVersion, memo string) string {
 	context := fmt.Sprintf("Current database instance: %s; database: %s (%s %s).", instanceID, dbName, dialectName, dbVersion)
 	if strings.TrimSpace(memo) != "" {
-		context += " Instance memo: " + strings.TrimSpace(memo) + "."
+		// Quote the memo so it reads as data: embedded quotes, backslashes and
+		// any remaining control characters are escaped instead of breaking the
+		// surrounding description. Config normalizes memos to one line, but the
+		// description is built from whatever the caller passed in.
+		context += " Instance memo: " + strconv.Quote(strings.TrimSpace(memo)) + "."
 	}
 	return context
 }

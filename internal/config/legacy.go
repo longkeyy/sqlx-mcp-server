@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // Names used before the DB_* rename. They are still accepted so an upgrade
@@ -202,7 +203,8 @@ func (r *configResolver) preferLegacy(currentKey, legacyKey string) string {
 // DATABASE_{ID}_{suffix} alias for the normalized id. On a conflict the current
 // key wins with a warning: a display name or memo has no security impact, so
 // failing startup over it would be disproportionate. rawID spells the keys
-// named in messages when a key is not set.
+// named in messages when a key is not set. A memo is normalized to one line and
+// capped, with a warning naming the key that supplied it.
 func (r *configResolver) resolveDisplaySetting(id, rawID, suffix string) (string, error) {
 	currentKey, legacyKey, err := r.settingKeys(id, rawID, suffix)
 	if err != nil {
@@ -211,18 +213,66 @@ func (r *configResolver) resolveDisplaySetting(id, rawID, suffix string) (string
 	current := r.trim(currentKey)
 	legacy := r.trim(legacyKey)
 
+	var value, key string
 	switch {
 	case legacy == "":
-		return current, nil
+		value, key = current, currentKey
 	case current == "":
 		r.warn("%s is deprecated; use %s instead", legacyKey, currentKey)
-		return legacy, nil
+		value, key = legacy, legacyKey
 	case current == legacy:
 		r.warn("%s and %s are both set to the same value; %s is deprecated, use %s instead", legacyKey, currentKey, legacyKey, currentKey)
+		value, key = current, currentKey
 	default:
 		r.warn("%s and %s are both set to different values; using %s", legacyKey, currentKey, currentKey)
+		value, key = current, currentKey
 	}
-	return current, nil
+
+	if suffix == settingMemo {
+		value = r.sanitizeMemoSetting(key, value)
+	}
+	return value, nil
+}
+
+// maxMemoRunes bounds a memo, which is rendered inside every tool description.
+const maxMemoRunes = 200
+
+// sanitizeMemoSetting normalizes a memo and warns about what it changed. The
+// warning names the key that supplied the value, which may be a legacy alias.
+func (r *configResolver) sanitizeMemoSetting(key, value string) string {
+	if value == "" {
+		return value
+	}
+	memo, normalized, truncated := sanitizeMemo(value)
+	if normalized {
+		r.warn("%s was normalized to a single line", key)
+	}
+	if truncated {
+		r.warn("%s was truncated to %d characters", key, maxMemoRunes)
+	}
+	return memo
+}
+
+// sanitizeMemo turns a memo into printable single-line text: control characters
+// and runs of whitespace become one space, and anything over maxMemoRunes is cut
+// with an ellipsis. The cut counts runes, so multi-byte text such as CJK keeps
+// its length and is never split mid-character.
+func sanitizeMemo(value string) (memo string, normalized, truncated bool) {
+	cleaned := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, value)
+	memo = strings.Join(strings.Fields(cleaned), " ")
+	normalized = memo != strings.TrimSpace(value)
+
+	runes := []rune(memo)
+	if len(runes) > maxMemoRunes {
+		memo = string(runes[:maxMemoRunes-1]) + "…"
+		truncated = true
+	}
+	return memo, normalized, truncated
 }
 
 // parsePoolConfig resolves the pool settings for one database. An empty id
