@@ -110,6 +110,24 @@ cp .env.example .env
 
 Named database instances use the same pattern: `DB_{ID}_URL`, optional `DB_{ID}_NAME`, and optional `DB_{ID}_MEMO`.
 
+### Legacy environment variable names
+
+Variables from releases before the `DB_*` rename are still accepted, so an existing deployment does not silently lose a database after an upgrade. Every use logs a deprecation warning on stderr.
+
+| Deprecated | Current |
+| --- | --- |
+| `DATABASE_URL` | `DB_URL` |
+| `DATABASE_{ID}_URL` | `DB_{ID}_URL` |
+| `DATABASE_{ID}_NAME`, `DATABASE_{ID}_MEMO` | `DB_{ID}_NAME`, `DB_{ID}_MEMO` |
+| `DATABASE_MAX_OPEN_CONNS`, `DATABASE_MAX_IDLE_CONNS` | `DB_MAX_OPEN_CONNS`, `DB_MAX_IDLE_CONNS` |
+| `DATABASE_{ID}_MAX_OPEN_CONNS`, `DATABASE_{ID}_MAX_IDLE_CONNS` | `DB_{ID}_MAX_OPEN_CONNS`, `DB_{ID}_MAX_IDLE_CONNS` |
+| `INSTANCE_NAME` | `DB_NAME` |
+| `DEFAULT_DATABASE` | `DEFAULT_DB` |
+
+Only the deprecated name set: it is used, with a warning. Both set to the same value: the current name is used, with a warning. Both set to different values: startup fails with an error naming both keys; DSNs are never printed. `INSTANCE_NAME` is the exception and still wins over `DB_NAME` for compatibility, with a warning. Per-database display settings (`*_NAME`, `*_MEMO`) prefer the current key on a conflict and warn.
+
+Warnings are written to stderr, so stdio output stays valid JSON-RPC.
+
 ### DSN Formats
 
 ```text
@@ -178,7 +196,7 @@ DB_REPORTING_MEMO=Analytics and BI replica
 
 `DB_MEMO` and `DB_{ID}_MEMO` are included in MCP tool descriptions so agents can distinguish similarly named database instances before they call a tool.
 
-If `DEFAULT_DB` is not set, `DB_URL` is used as the default when present. Otherwise, the first configured database id in sorted order is used.
+If `DEFAULT_DB` is not set, `DB_URL` is used as the default when present. Otherwise, the first configured database id in sorted order is used; when more than one database is configured this logs a warning naming the chosen id.
 
 ## Connection Pool Settings
 

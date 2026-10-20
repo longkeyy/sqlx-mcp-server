@@ -27,8 +27,6 @@ const (
 	envDatabaseMaxIdleConns = "DB_MAX_IDLE_CONNS"
 )
 
-var databaseURLEnvPattern = regexp.MustCompile(`^DB_(.+)_URL$`)
-
 // AppConfig holds the application configuration
 type AppConfig struct {
 	DSN             string
@@ -37,6 +35,9 @@ type AppConfig struct {
 	AuthToken       string
 	Databases       []DatabaseConfig
 	DefaultDatabase string
+	// Warnings holds non-fatal configuration problems, such as a deprecated
+	// environment variable still being used. The caller should log them.
+	Warnings []string
 }
 
 type DatabaseConfig struct {
@@ -73,19 +74,25 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 		value, ok := env[key]
 		return value, ok
 	}
+	// resolver reads settings that also have a pre-rename alias.
+	resolver := newConfigResolver(env)
 
-	// DSN priority: --dsn flag > DB_URL env
+	// DSN priority: --dsn flag > DB_URL env > DATABASE_URL env (deprecated)
 	if *dsn != "" {
 		config.DSN = *dsn
-	} else if envDSN, ok := lookupEnv(envDatabaseURL); ok && envDSN != "" {
+	} else {
+		envDSN, err := resolver.resolve(envDatabaseURL, legacyEnvDatabaseURL, trimSpace)
+		if err != nil {
+			return nil, err
+		}
 		config.DSN = envDSN
 	}
 
-	// Instance name priority: --name flag > DB_NAME env
+	// Instance name priority: --name flag > INSTANCE_NAME env (deprecated) > DB_NAME env
 	if *name != "" {
 		config.Name = *name
-	} else if envName, ok := lookupEnv(envDatabaseName); ok && envName != "" {
-		config.Name = envName
+	} else {
+		config.Name = resolver.preferLegacy(envDatabaseName, legacyEnvInstanceName)
 	}
 
 	if *listen != "" {
@@ -99,26 +106,36 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 		config.AuthToken = strings.TrimSpace(envAuthToken)
 	}
 
-	databases, defaultDatabase, err := parseDatabaseConfigs(config.DSN, config.Name, strings.TrimSpace(env[envDatabaseMemo]), env)
+	// DEFAULT_DB priority: DEFAULT_DB env > DEFAULT_DATABASE env (deprecated)
+	defaultDatabase, err := resolver.resolve(envDefaultDatabase, legacyEnvDefaultDatabase, normalizeDefaultDatabase)
+	if err != nil {
+		return nil, err
+	}
+
+	databases, defaultID, err := parseDatabaseConfigs(resolver, config.DSN, config.Name, resolver.trim(envDatabaseMemo), defaultDatabase)
 	if err != nil {
 		return nil, err
 	}
 	config.Databases = databases
-	config.DefaultDatabase = defaultDatabase
-	if config.DSN == "" && defaultDatabase != "" {
-		config.DSN = databaseByID(databases, defaultDatabase).DSN
+	config.DefaultDatabase = defaultID
+	config.Warnings = resolver.warningsText()
+	if config.DSN == "" && defaultID != "" {
+		config.DSN = databaseByID(databases, defaultID).DSN
 	}
-	if config.Name == "" && defaultDatabase != "" {
-		config.Name = databaseByID(databases, defaultDatabase).Name
+	if config.Name == "" && defaultID != "" {
+		config.Name = databaseByID(databases, defaultID).Name
 	}
 
 	return config, nil
 }
 
-func parseDatabaseConfigs(defaultDSN, defaultName, defaultMemo string, env map[string]string) ([]DatabaseConfig, string, error) {
+// parseDatabaseConfigs builds the database list from the default DSN plus every
+// DB_{ID}_URL / DATABASE_{ID}_URL key. rawDefault is the already-resolved
+// DEFAULT_DB / DEFAULT_DATABASE value; resolver collects any warnings.
+func parseDatabaseConfigs(resolver *configResolver, defaultDSN, defaultName, defaultMemo, rawDefault string) ([]DatabaseConfig, string, error) {
 	databasesByID := map[string]DatabaseConfig{}
 	var ids []string
-	globalPool, err := parsePoolConfig(env, "")
+	globalPool, err := resolver.parsePoolConfig("")
 	if err != nil {
 		return nil, "", err
 	}
@@ -128,7 +145,7 @@ func parseDatabaseConfigs(defaultDSN, defaultName, defaultMemo string, env map[s
 		if name == "" {
 			name = "sql-mcp-default"
 		}
-		pool, err := parsePoolConfig(env, defaultDatabaseID)
+		pool, err := resolver.parsePoolConfig(defaultDatabaseID)
 		if err != nil {
 			return nil, "", err
 		}
@@ -149,35 +166,24 @@ func parseDatabaseConfigs(defaultDSN, defaultName, defaultMemo string, env map[s
 		ids = append(ids, defaultDatabaseID)
 	}
 
-	var envKeys []string
-	for key := range env {
-		envKeys = append(envKeys, key)
+	namedURLs, err := discoverDatabaseURLs(resolver)
+	if err != nil {
+		return nil, "", err
 	}
-	sort.Strings(envKeys)
+	namedIDs := make([]string, 0, len(namedURLs))
+	for id := range namedURLs {
+		namedIDs = append(namedIDs, id)
+	}
+	sort.Strings(namedIDs)
 
-	for _, key := range envKeys {
-		match := databaseURLEnvPattern.FindStringSubmatch(key)
-		if match == nil {
-			continue
-		}
-		rawID := match[1]
-		id, err := normalizeDatabaseID(rawID)
-		if err != nil {
-			return nil, "", fmt.Errorf("invalid database env %s: %w", key, err)
-		}
-		if id == defaultDatabaseID {
-			return nil, "", fmt.Errorf("%s is reserved; use DB_URL for the default database", key)
-		}
-		dsn := strings.TrimSpace(env[key])
-		if dsn == "" {
-			continue
-		}
-		name := strings.TrimSpace(env[fmt.Sprintf("DB_%s_NAME", rawID)])
+	for _, id := range namedIDs {
+		source := namedURLs[id]
+		name := resolver.resolveDisplaySetting(source.rawID, "NAME")
 		if name == "" {
 			name = "sql-mcp-" + id
 		}
-		memo := strings.TrimSpace(env[fmt.Sprintf("DB_%s_MEMO", rawID)])
-		pool, err := parsePoolConfig(env, rawID)
+		memo := resolver.resolveDisplaySetting(source.rawID, "MEMO")
+		pool, err := resolver.parsePoolConfig(source.rawID)
 		if err != nil {
 			return nil, "", err
 		}
@@ -187,15 +193,12 @@ func parseDatabaseConfigs(defaultDSN, defaultName, defaultMemo string, env map[s
 		if !pool.hasMaxIdle {
 			pool.maxIdle = globalPool.maxIdle
 		}
-		if existing, exists := databasesByID[id]; exists {
-			return nil, "", fmt.Errorf("database id %q is configured more than once; duplicate DSNs: %s and %s", id, existing.DSN, dsn)
-		}
 		ids = append(ids, id)
 		databasesByID[id] = DatabaseConfig{
 			ID:           id,
 			Name:         name,
 			Memo:         memo,
-			DSN:          dsn,
+			DSN:          source.dsn,
 			MaxOpenConns: pool.maxOpen,
 			MaxIdleConns: pool.maxIdle,
 		}
@@ -220,18 +223,22 @@ func parseDatabaseConfigs(defaultDSN, defaultName, defaultMemo string, env map[s
 	}
 
 	defaultID := ""
-	if rawDefault := strings.TrimSpace(env[envDefaultDatabase]); rawDefault != "" {
+	if rawDefault != "" {
+		defaultKey := resolver.activeKey(envDefaultDatabase, legacyEnvDefaultDatabase)
 		normalized, err := normalizeDatabaseID(rawDefault)
 		if err != nil {
-			return nil, "", fmt.Errorf("invalid DEFAULT_DB: %w", err)
+			return nil, "", fmt.Errorf("invalid %s: %w", defaultKey, err)
 		}
 		if _, exists := databasesByID[normalized]; !exists {
-			return nil, "", fmt.Errorf("DEFAULT_DB %q does not match any configured database", rawDefault)
+			return nil, "", fmt.Errorf("%s %q does not match any configured database", defaultKey, rawDefault)
 		}
 		defaultID = normalized
 	} else if _, exists := databasesByID[defaultDatabaseID]; exists {
 		defaultID = defaultDatabaseID
 	} else {
+		if len(ids) > 1 {
+			resolver.warn("%s is not set; using %q as the default database", envDefaultDatabase, ids[0])
+		}
 		defaultID = ids[0]
 	}
 
@@ -240,48 +247,6 @@ func parseDatabaseConfigs(defaultDSN, defaultName, defaultMemo string, env map[s
 		databases = append(databases, databasesByID[id])
 	}
 	return databases, defaultID, nil
-}
-
-type poolConfig struct {
-	maxOpen    int
-	maxIdle    int
-	hasMaxOpen bool
-	hasMaxIdle bool
-}
-
-func parsePoolConfig(env map[string]string, rawID string) (poolConfig, error) {
-	pool := poolConfig{
-		maxOpen: defaultMaxOpenConns,
-		maxIdle: defaultMaxIdleConns,
-	}
-
-	openKey := envDatabaseMaxOpenConns
-	idleKey := envDatabaseMaxIdleConns
-	if rawID != "" {
-		openKey = fmt.Sprintf("DB_%s_MAX_OPEN_CONNS", rawID)
-		idleKey = fmt.Sprintf("DB_%s_MAX_IDLE_CONNS", rawID)
-	}
-
-	if value, ok := env[openKey]; ok && strings.TrimSpace(value) != "" {
-		parsed, err := parsePositiveIntEnv(openKey, value)
-		if err != nil {
-			return pool, err
-		}
-		pool.maxOpen = parsed
-		pool.hasMaxOpen = true
-	}
-	if value, ok := env[idleKey]; ok && strings.TrimSpace(value) != "" {
-		parsed, err := parsePositiveIntEnv(idleKey, value)
-		if err != nil {
-			return pool, err
-		}
-		pool.maxIdle = parsed
-		pool.hasMaxIdle = true
-	}
-	if pool.maxIdle > pool.maxOpen {
-		return pool, fmt.Errorf("%s must be less than or equal to %s", idleKey, openKey)
-	}
-	return pool, nil
 }
 
 func parsePositiveIntEnv(key, value string) (int, error) {

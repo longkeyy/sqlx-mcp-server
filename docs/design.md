@@ -45,7 +45,9 @@ DB_ROACH_URL=cockroach://user:pass@roach:26257/app
 DEFAULT_DB=APP
 ```
 
-The middle token in `DB_{ID}_URL` becomes the stable lowercase route id. `DB_{ID}_NAME` is optional and controls the MCP server display name for that database. `DB_{ID}_MEMO` is optional and gives agents a plain-language purpose for that database. If `DEFAULT_DB` is not set, `DB_URL` is the default when present; otherwise the first configured id in sorted order is used.
+The middle token in `DB_{ID}_URL` becomes the stable lowercase route id. `DB_{ID}_NAME` is optional and controls the MCP server display name for that database. `DB_{ID}_MEMO` is optional and gives agents a plain-language purpose for that database. If `DEFAULT_DB` is not set, `DB_URL` is the default when present; otherwise the first configured id in sorted order is used, which is logged as a warning when several databases are configured.
+
+Names from before the `DB_*` rename are kept as deprecated aliases (`DATABASE_URL`, `DATABASE_{ID}_URL`, `DATABASE_{ID}_NAME`, `DATABASE_{ID}_MEMO`, `DATABASE_MAX_*`, `DATABASE_{ID}_MAX_*`, `INSTANCE_NAME`, `DEFAULT_DATABASE`) so an upgrade does not silently drop configuration. Resolution treats blank values as unset and compares aliases after trimming: a value present only under the deprecated name is used with a warning, equal duplicates warn, and conflicting non-display values fail startup with an error naming both keys but never the values, since values may contain credentials. Display-only settings (server and database names, memos) resolve a conflict in favor of the current key with a warning; `INSTANCE_NAME` keeps winning over `DB_NAME` for compatibility. Warnings are written to stderr so stdio stdout carries only JSON-RPC.
 
 When `LISTEN` is set to a network address such as `:8088` or `127.0.0.1:8088`, the process starts an HTTP server and exposes these paths:
 
