@@ -17,10 +17,56 @@ const (
 	legacyEnvDatabaseMaxIdleConns = "DATABASE_MAX_IDLE_CONNS"
 )
 
-// databaseSettingEnvPattern indexes both current and legacy per-database keys.
+// Suffixes of the per-database DB_{ID}_{SUFFIX} keys.
+const (
+	settingURL          = "URL"
+	settingName         = "NAME"
+	settingMemo         = "MEMO"
+	settingMaxOpenConns = "MAX_OPEN_CONNS"
+	settingMaxIdleConns = "MAX_IDLE_CONNS"
+)
+
+// databaseSettingEnvPattern matches both current and legacy per-database keys.
 // It does not match the global keys DB_URL, DB_NAME, DB_MEMO, DB_MAX_* because
-// those have no id segment; the suffix is matched case-sensitively.
+// those have no id segment. The prefix and suffix are matched case-sensitively;
+// the id segment is normalized, so DB_APP_URL and DB_app_NAME belong together.
 var databaseSettingEnvPattern = regexp.MustCompile(`^(DB|DATABASE)_(.+)_(URL|NAME|MEMO|MAX_OPEN_CONNS|MAX_IDLE_CONNS)$`)
+
+// databaseSetting is one DB_{ID}_{SUFFIX} or DATABASE_{ID}_{SUFFIX} key.
+type databaseSetting struct {
+	key    string // as written in the environment
+	legacy bool   // DATABASE_ prefix
+	rawID  string // id segment as written; spells the keys suggested in messages
+	id     string // normalized id; empty when idErr is set
+	idErr  error
+	suffix string
+	value  string // trimmed; blank counts as unset
+}
+
+// indexDatabaseSettings classifies every per-database key once, in sorted key
+// order. It neither fails nor warns: whether a key is used, ignored with a
+// warning or rejected depends on the rest of the configuration, so that is
+// left to the callers.
+func indexDatabaseSettings(env map[string]string) []databaseSetting {
+	var settings []databaseSetting
+	for _, key := range sortedEnvKeys(env) {
+		match := databaseSettingEnvPattern.FindStringSubmatch(key)
+		if match == nil {
+			continue
+		}
+		id, err := normalizeDatabaseID(match[2])
+		settings = append(settings, databaseSetting{
+			key:    key,
+			legacy: match[1] == "DATABASE",
+			rawID:  match[2],
+			id:     id,
+			idErr:  err,
+			suffix: match[3],
+			value:  strings.TrimSpace(env[key]),
+		})
+	}
+	return settings
+}
 
 // poolConfig is one database's resolved connection limits. The has* flags
 // record whether the value came from a key rather than the built-in default,
@@ -40,11 +86,12 @@ type poolConfig struct {
 // order settings are resolved, which is deterministic.
 type configResolver struct {
 	env      map[string]string
+	settings []databaseSetting
 	warnings []string
 }
 
 func newConfigResolver(env map[string]string) *configResolver {
-	return &configResolver{env: env}
+	return &configResolver{env: env, settings: indexDatabaseSettings(env)}
 }
 
 func (r *configResolver) trim(key string) string {
@@ -116,42 +163,48 @@ func (r *configResolver) preferLegacy(currentKey, legacyKey string) string {
 }
 
 // resolveDisplaySetting resolves DB_{ID}_{suffix} against its legacy
-// DATABASE_{ID}_{suffix} alias. On a conflict the current key wins with a
-// warning: a display name or memo has no security impact, so failing startup
-// over it would be disproportionate.
-func (r *configResolver) resolveDisplaySetting(rawID, suffix string) string {
-	currentKey := fmt.Sprintf("DB_%s_%s", rawID, suffix)
-	legacyKey := fmt.Sprintf("DATABASE_%s_%s", rawID, suffix)
-
+// DATABASE_{ID}_{suffix} alias for the normalized id. On a conflict the current
+// key wins with a warning: a display name or memo has no security impact, so
+// failing startup over it would be disproportionate. rawID spells the keys
+// named in messages when a key is not set.
+func (r *configResolver) resolveDisplaySetting(id, rawID, suffix string) (string, error) {
+	currentKey, legacyKey, err := r.settingKeys(id, rawID, suffix)
+	if err != nil {
+		return "", err
+	}
 	current := r.trim(currentKey)
 	legacy := r.trim(legacyKey)
 
 	switch {
 	case legacy == "":
-		return current
+		return current, nil
 	case current == "":
 		r.warn("%s is deprecated; use %s instead", legacyKey, currentKey)
-		return legacy
-	case current != legacy:
+		return legacy, nil
+	case current == legacy:
+		r.warn("%s and %s are both set to the same value; %s is deprecated, use %s instead", legacyKey, currentKey, legacyKey, currentKey)
+	default:
 		r.warn("%s and %s are both set to different values; using %s", legacyKey, currentKey, currentKey)
 	}
-	return current
+	return current, nil
 }
 
-// parsePoolConfig resolves the pool settings for one database. rawID is the id
-// as written in the environment so DB_{ID}_* keeps matching exactly as before;
-// an empty rawID means the global DB_MAX_* settings. Errors name the keys
-// actually in use and never carry values.
-func (r *configResolver) parsePoolConfig(rawID string) (poolConfig, error) {
-	openKey := envDatabaseMaxOpenConns
-	idleKey := envDatabaseMaxIdleConns
-	legacyOpenKey := legacyEnvDatabaseMaxOpenConns
-	legacyIdleKey := legacyEnvDatabaseMaxIdleConns
-	if rawID != "" {
-		openKey = fmt.Sprintf("DB_%s_MAX_OPEN_CONNS", rawID)
-		idleKey = fmt.Sprintf("DB_%s_MAX_IDLE_CONNS", rawID)
-		legacyOpenKey = fmt.Sprintf("DATABASE_%s_MAX_OPEN_CONNS", rawID)
-		legacyIdleKey = fmt.Sprintf("DATABASE_%s_MAX_IDLE_CONNS", rawID)
+// parsePoolConfig resolves the pool settings for one database. An empty id
+// means the global DB_MAX_* settings; otherwise the DB_{ID}_MAX_* keys are
+// matched to the normalized id case-insensitively, and rawID spells the keys
+// named in messages when a key is not set. Errors name the keys actually in
+// use and never carry values.
+func (r *configResolver) parsePoolConfig(id, rawID string) (poolConfig, error) {
+	openKey, legacyOpenKey := envDatabaseMaxOpenConns, legacyEnvDatabaseMaxOpenConns
+	idleKey, legacyIdleKey := envDatabaseMaxIdleConns, legacyEnvDatabaseMaxIdleConns
+	if id != "" {
+		var err error
+		if openKey, legacyOpenKey, err = r.settingKeys(id, rawID, settingMaxOpenConns); err != nil {
+			return poolConfig{}, err
+		}
+		if idleKey, legacyIdleKey, err = r.settingKeys(id, rawID, settingMaxIdleConns); err != nil {
+			return poolConfig{}, err
+		}
 	}
 
 	pool := poolConfig{
@@ -191,9 +244,92 @@ func (r *configResolver) parsePoolConfig(rawID string) (poolConfig, error) {
 	return pool, nil
 }
 
+// settingKeys returns the current and legacy keys that set suffix for the
+// normalized id. A side that is not set gets the spelling of the side that is,
+// or of rawID, so resolve and activeKey see it as unset while messages still
+// name a key the operator can set.
+func (r *configResolver) settingKeys(id, rawID, suffix string) (currentKey, legacyKey string, err error) {
+	current, err := r.pickSetting(id, suffix, false)
+	if err != nil {
+		return "", "", err
+	}
+	legacy, err := r.pickSetting(id, suffix, true)
+	if err != nil {
+		return "", "", err
+	}
+
+	if current.key != "" {
+		rawID = current.rawID
+	} else if legacy.key != "" {
+		rawID = legacy.rawID
+	}
+	currentKey = fmt.Sprintf("DB_%s_%s", rawID, suffix)
+	legacyKey = fmt.Sprintf("DATABASE_%s_%s", rawID, suffix)
+	if current.key != "" {
+		currentKey = current.key
+	}
+	if legacy.key != "" {
+		legacyKey = legacy.key
+	}
+	return currentKey, legacyKey, nil
+}
+
+// pickSetting returns the one key that sets suffix for the normalized id with
+// the given prefix. Ids are case-insensitive, so DB_APP_NAME and DB_app_NAME
+// are spellings of the same setting: equal values are accepted with a warning,
+// and different values are an error because neither spelling outranks the
+// other.
+func (r *configResolver) pickSetting(id, suffix string, legacy bool) (databaseSetting, error) {
+	var picked databaseSetting
+	for _, setting := range r.settings {
+		if setting.id != id || setting.suffix != suffix || setting.legacy != legacy || setting.value == "" {
+			continue
+		}
+		switch {
+		case picked.key == "":
+			picked = setting
+		case picked.value != setting.value:
+			return databaseSetting{}, fmt.Errorf("%s and %s are both set to different values; database ids are case-insensitive, so keep only one", picked.key, setting.key)
+		default:
+			r.warnDuplicateSpelling(picked.key, setting.key)
+		}
+	}
+	return picked, nil
+}
+
+func (r *configResolver) warnDuplicateSpelling(firstKey, secondKey string) {
+	r.warn("%s and %s are both set to the same value; database ids are case-insensitive, so keep only one", firstKey, secondKey)
+}
+
+// warnUnusedDatabaseSettings reports per-database keys that configure nothing:
+// settings for an id that has no URL, and DB_DEFAULT_NAME / DB_DEFAULT_MEMO,
+// which look like settings for the default database but never were. Without
+// the warning such a typo or leftover is silently ignored.
+func (r *configResolver) warnUnusedDatabaseSettings(named map[string]databaseURLSource, hasDefault bool) {
+	for _, setting := range r.settings {
+		if setting.suffix == settingURL || setting.value == "" {
+			continue
+		}
+		if setting.id == defaultDatabaseID {
+			switch {
+			case setting.suffix == settingName:
+				r.warn("%s does not apply to the default database; use %s instead", setting.key, envDatabaseName)
+			case setting.suffix == settingMemo:
+				r.warn("%s does not apply to the default database; use %s instead", setting.key, envDatabaseMemo)
+			case !hasDefault:
+				r.warn("%s has no effect because %s is not set", setting.key, envDatabaseURL)
+			}
+			continue
+		}
+		if _, configured := named[setting.id]; !configured {
+			r.warn("%s has no effect because DB_%s_URL is not set", setting.key, setting.rawID)
+		}
+	}
+}
+
 // databaseURLSource is one resolved DB_{ID}_URL / DATABASE_{ID}_URL setting.
-// rawID keeps the spelling used in the environment so the per-id NAME, MEMO and
-// pool keys are still found; id is the normalized routing id.
+// id is the normalized routing id; rawID keeps the spelling used in the
+// environment for the keys suggested in messages.
 type databaseURLSource struct {
 	id    string
 	rawID string
@@ -207,38 +343,39 @@ type databaseURLSource struct {
 // pairwise, which catches a renamed deployment that still has both. A pair set
 // to different DSNs is an error: silently picking one could point the process at
 // the wrong database. Equal duplicates use the current key and warn. The id is
-// normalized for grouping, so DB_APP_URL and DB_app_URL still collide.
+// normalized for grouping, so DB_APP_URL and DB_app_URL are the same database:
+// equal values warn, different values are an error.
 func discoverDatabaseURLs(r *configResolver) (map[string]databaseURLSource, error) {
 	current := map[string]databaseURLSource{}
 	legacy := map[string]databaseURLSource{}
 
-	for _, key := range sortedEnvKeys(r.env) {
-		match := databaseSettingEnvPattern.FindStringSubmatch(key)
-		if match == nil || match[3] != "URL" {
+	for _, setting := range r.settings {
+		if setting.suffix != settingURL {
 			continue
 		}
-		origin, rawID := match[1], match[2]
-		id, err := normalizeDatabaseID(rawID)
-		if err != nil {
-			return nil, fmt.Errorf("invalid database env %s: %w", key, err)
+		if setting.idErr != nil {
+			return nil, fmt.Errorf("invalid database env %s: %w", setting.key, setting.idErr)
 		}
-		if id == defaultDatabaseID {
-			return nil, fmt.Errorf("%s is reserved; use %s for the default database", key, envDatabaseURL)
+		if setting.id == defaultDatabaseID {
+			return nil, fmt.Errorf("%s is reserved; use %s for the default database", setting.key, envDatabaseURL)
 		}
-		dsn := strings.TrimSpace(r.env[key])
-		if dsn == "" {
+		if setting.value == "" {
 			continue
 		}
 
-		source := databaseURLSource{id: id, rawID: rawID, key: key, dsn: dsn}
+		source := databaseURLSource{id: setting.id, rawID: setting.rawID, key: setting.key, dsn: setting.value}
 		group := current
-		if origin == "DATABASE" {
+		if setting.legacy {
 			group = legacy
 		}
-		if existing, exists := group[id]; exists {
-			return nil, fmt.Errorf("database id %q is configured more than once by %s and %s", id, existing.key, key)
+		if existing, exists := group[setting.id]; exists {
+			if existing.dsn != source.dsn {
+				return nil, fmt.Errorf("database id %q is configured more than once by %s and %s", setting.id, existing.key, setting.key)
+			}
+			r.warnDuplicateSpelling(existing.key, setting.key)
+			continue
 		}
-		group[id] = source
+		group[setting.id] = source
 	}
 
 	legacyIDs := make([]string, 0, len(legacy))

@@ -137,7 +137,7 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 func parseDatabaseConfigs(resolver *configResolver, defaultDSN, defaultName, defaultMemo, rawDefault string) ([]DatabaseConfig, string, error) {
 	databasesByID := map[string]DatabaseConfig{}
 	var ids []string
-	globalPool, err := resolver.parsePoolConfig("")
+	globalPool, err := resolver.parsePoolConfig("", "")
 	if err != nil {
 		return nil, "", err
 	}
@@ -147,7 +147,7 @@ func parseDatabaseConfigs(resolver *configResolver, defaultDSN, defaultName, def
 		if name == "" {
 			name = "sql-mcp-default"
 		}
-		pool, err := resolver.parsePoolConfig(defaultDatabaseID)
+		pool, err := resolver.parsePoolConfig(defaultDatabaseID, "DEFAULT")
 		if err != nil {
 			return nil, "", err
 		}
@@ -172,6 +172,7 @@ func parseDatabaseConfigs(resolver *configResolver, defaultDSN, defaultName, def
 	if err != nil {
 		return nil, "", err
 	}
+	resolver.warnUnusedDatabaseSettings(namedURLs, defaultDSN != "")
 	namedIDs := make([]string, 0, len(namedURLs))
 	for id := range namedURLs {
 		namedIDs = append(namedIDs, id)
@@ -180,12 +181,18 @@ func parseDatabaseConfigs(resolver *configResolver, defaultDSN, defaultName, def
 
 	for _, id := range namedIDs {
 		source := namedURLs[id]
-		name := resolver.resolveDisplaySetting(source.rawID, "NAME")
+		name, err := resolver.resolveDisplaySetting(source.id, source.rawID, settingName)
+		if err != nil {
+			return nil, "", err
+		}
 		if name == "" {
 			name = "sql-mcp-" + id
 		}
-		memo := resolver.resolveDisplaySetting(source.rawID, "MEMO")
-		pool, err := resolver.parsePoolConfig(source.rawID)
+		memo, err := resolver.resolveDisplaySetting(source.id, source.rawID, settingMemo)
+		if err != nil {
+			return nil, "", err
+		}
+		pool, err := resolver.parsePoolConfig(source.id, source.rawID)
 		if err != nil {
 			return nil, "", err
 		}

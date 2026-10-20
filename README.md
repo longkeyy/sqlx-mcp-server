@@ -110,6 +110,8 @@ cp .env.example .env
 
 Named database instances use the same pattern: `DB_{ID}_URL`, optional `DB_{ID}_NAME`, and optional `DB_{ID}_MEMO`.
 
+The `{ID}` token is matched case-insensitively across all `DB_{ID}_*` keys, so `DB_APP_URL` pairs with `DB_app_NAME` and `DB_aPp_MAX_OPEN_CONNS`. Two spellings of one id are the same setting: equal values are accepted with a warning, and different values fail startup.
+
 ### Legacy environment variable names
 
 Variables from releases before the `DB_*` rename are still accepted, so an existing deployment does not silently lose a database after an upgrade. Every use logs a deprecation warning on stderr.
@@ -125,6 +127,8 @@ Variables from releases before the `DB_*` rename are still accepted, so an exist
 | `DEFAULT_DATABASE` | `DEFAULT_DB` |
 
 Only the deprecated name set: it is used, with a warning. Both set to the same value: the current name is used, with a warning. Both set to different values: startup fails with an error naming both keys; DSNs are never printed. `INSTANCE_NAME` is the exception and still wins over `DB_NAME` for compatibility, with a warning. Per-database display settings (`*_NAME`, `*_MEMO`) prefer the current key on a conflict and warn.
+
+Per-database settings are also matched to their `*_URL` key by id regardless of case. A setting for an id that has no URL is ignored with a warning instead of silently doing nothing. `DB_DEFAULT_MAX_*` configures the default database; `DB_DEFAULT_NAME` and `DB_DEFAULT_MEMO` are not used and warn, because the default database's name and memo come from `DB_NAME` and `DB_MEMO`.
 
 Warnings are written to stderr, so stdio output stays valid JSON-RPC.
 
@@ -170,7 +174,7 @@ DB_ROACH_URL=cockroach://user:pass@roach:26257/app
 DEFAULT_DB=APP
 ```
 
-The `{ID}` part becomes the lowercase route id. For example, `DB_REPORTING_URL` becomes `reporting`.
+The `{ID}` part becomes the lowercase route id. For example, `DB_REPORTING_URL` becomes `reporting`. Id matching is case-insensitive, so `DB_reporting_MEMO` applies to the same database.
 
 Routes:
 
@@ -217,6 +221,8 @@ Per-database overrides:
 DB_APP_MAX_OPEN_CONNS=10
 DB_APP_MAX_IDLE_CONNS=1
 ```
+
+The default database from `DB_URL` uses the id `default`, so `DB_DEFAULT_MAX_OPEN_CONNS` and `DB_DEFAULT_MAX_IDLE_CONNS` override its pool.
 
 The default idle connection count is intentionally low because MCP SQL access is often low-frequency.
 
