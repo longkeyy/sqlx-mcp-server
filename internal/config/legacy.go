@@ -68,14 +68,50 @@ func indexDatabaseSettings(env map[string]string) []databaseSetting {
 	return settings
 }
 
-// poolConfig is one database's resolved connection limits. The has* flags
-// record whether the value came from a key rather than the built-in default,
-// so inheritance and later validation can tell the two apart.
+// poolConfig is one database's resolved connection limits, before or after
+// inheritance. The has* flags record whether a value came from a key rather
+// than the built-in default, and the key fields name the key that supplied it
+// so validation can point at the scope that actually set the limit. An empty
+// key means the built-in default applies.
 type poolConfig struct {
 	maxOpen    int
 	maxIdle    int
 	hasMaxOpen bool
 	hasMaxIdle bool
+	openKey    string
+	idleKey    string
+}
+
+// inheriting fills the limits this scope left unset from the global pool. The
+// key that supplies an inherited value comes along with it, so an error can
+// name the global key rather than one that was never set.
+func (p poolConfig) inheriting(global poolConfig) poolConfig {
+	if !p.hasMaxOpen {
+		p.maxOpen, p.hasMaxOpen, p.openKey = global.maxOpen, global.hasMaxOpen, global.openKey
+	}
+	if !p.hasMaxIdle {
+		p.maxIdle, p.hasMaxIdle, p.idleKey = global.maxIdle, global.hasMaxIdle, global.idleKey
+	}
+	return p
+}
+
+// validatePool checks the effective limits of one database after inheritance.
+// database/sql silently clamps IdleConns down to MaxOpenConns, so a pool whose
+// idle limit is larger is a configuration mistake that would otherwise only
+// show up as unexpected connection churn.
+func validatePool(databaseID string, pool poolConfig) error {
+	if pool.maxIdle <= pool.maxOpen {
+		return nil
+	}
+	return fmt.Errorf("database %q: max idle connections %d (%s) exceeds max open connections %d (%s)",
+		databaseID, pool.maxIdle, poolKeyName(pool.idleKey), pool.maxOpen, poolKeyName(pool.openKey))
+}
+
+func poolKeyName(key string) string {
+	if key == "" {
+		return "default"
+	}
+	return key
 }
 
 // configResolver reads environment settings, falling back to the pre-rename
@@ -223,6 +259,7 @@ func (r *configResolver) parsePoolConfig(id, rawID string) (poolConfig, error) {
 		}
 		pool.maxOpen = parsed
 		pool.hasMaxOpen = true
+		pool.openKey = r.activeKey(openKey, legacyOpenKey)
 	}
 
 	idleValue, err := r.resolve(idleKey, legacyIdleKey, trimSpace)
@@ -236,11 +273,12 @@ func (r *configResolver) parsePoolConfig(id, rawID string) (poolConfig, error) {
 		}
 		pool.maxIdle = parsed
 		pool.hasMaxIdle = true
+		pool.idleKey = r.activeKey(idleKey, legacyIdleKey)
 	}
 
-	if pool.maxIdle > pool.maxOpen {
-		return pool, fmt.Errorf("%s must be less than or equal to %s", r.activeKey(idleKey, legacyIdleKey), r.activeKey(openKey, legacyOpenKey))
-	}
+	// The pair is validated after inheritance, by validatePool: a per-id idle
+	// limit may legitimately exceed the built-in open limit when the global
+	// settings raise it.
 	return pool, nil
 }
 

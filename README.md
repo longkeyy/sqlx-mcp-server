@@ -228,6 +228,12 @@ DB_APP_MAX_IDLE_CONNS=1
 
 The default database from `DB_URL` uses the id `default`, so `DB_DEFAULT_MAX_OPEN_CONNS` and `DB_DEFAULT_MAX_IDLE_CONNS` override its pool.
 
+Limits resolve as per-database key, then global key, then built-in default. Startup fails if a database's effective idle limit exceeds its effective open limit, and the error names the key, or the built-in default, that supplied each limit:
+
+```text
+database "app": max idle connections 40 (DB_APP_MAX_IDLE_CONNS) exceeds max open connections 10 (DB_MAX_OPEN_CONNS)
+```
+
 The default idle connection count is intentionally low because MCP SQL access is often low-frequency.
 
 ## Authentication

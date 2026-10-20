@@ -183,7 +183,10 @@ func TestParseConfigNamesLegacyPoolKeysInRangeErrors(t *testing.T) {
 		"DATABASE_APP_MAX_OPEN_CONNS": "1",
 		"DATABASE_APP_MAX_IDLE_CONNS": "2",
 	})
-	assertErrorMentions(t, err, "DATABASE_APP_MAX_IDLE_CONNS must be less than or equal to DATABASE_APP_MAX_OPEN_CONNS")
+	assertErrorMentions(t, err,
+		`database "app"`,
+		"max idle connections 2 (DATABASE_APP_MAX_IDLE_CONNS)",
+		"max open connections 1 (DATABASE_APP_MAX_OPEN_CONNS)")
 }
 
 func TestParseConfigRejectsUnknownFlag(t *testing.T) {

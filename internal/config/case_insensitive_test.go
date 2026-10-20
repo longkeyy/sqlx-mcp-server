@@ -151,7 +151,10 @@ func TestParseConfigNamesLegacyPoolKeysForCaseVariantIDs(t *testing.T) {
 		"DATABASE_app_MAX_OPEN_CONNS": "1",
 		"DATABASE_app_MAX_IDLE_CONNS": "2",
 	})
-	assertErrorMentions(t, err, "DATABASE_app_MAX_IDLE_CONNS must be less than or equal to DATABASE_app_MAX_OPEN_CONNS")
+	assertErrorMentions(t, err,
+		`database "app"`,
+		"max idle connections 2 (DATABASE_app_MAX_IDLE_CONNS)",
+		"max open connections 1 (DATABASE_app_MAX_OPEN_CONNS)")
 }
 
 func TestParseConfigWarnsAboutPoolSettingsForDefaultWithoutURL(t *testing.T) {

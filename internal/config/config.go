@@ -179,11 +179,9 @@ func parseDatabaseConfigs(resolver *configResolver, global globalDatabaseSetting
 		if err != nil {
 			return nil, "", err
 		}
-		if !pool.hasMaxOpen {
-			pool.maxOpen = globalPool.maxOpen
-		}
-		if !pool.hasMaxIdle {
-			pool.maxIdle = globalPool.maxIdle
+		pool = pool.inheriting(globalPool)
+		if err := validatePool(defaultDatabaseID, pool); err != nil {
+			return nil, "", err
 		}
 		databasesByID[defaultDatabaseID] = DatabaseConfig{
 			ID:           defaultDatabaseID,
@@ -226,11 +224,9 @@ func parseDatabaseConfigs(resolver *configResolver, global globalDatabaseSetting
 		if err != nil {
 			return nil, "", err
 		}
-		if !pool.hasMaxOpen {
-			pool.maxOpen = globalPool.maxOpen
-		}
-		if !pool.hasMaxIdle {
-			pool.maxIdle = globalPool.maxIdle
+		pool = pool.inheriting(globalPool)
+		if err := validatePool(id, pool); err != nil {
+			return nil, "", err
 		}
 		ids = append(ids, id)
 		databasesByID[id] = DatabaseConfig{

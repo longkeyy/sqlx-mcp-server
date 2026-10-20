@@ -72,6 +72,8 @@ DB_APP_MAX_OPEN_CONNS=10
 DB_APP_MAX_IDLE_CONNS=1
 ```
 
+Limits resolve per database as per-id key, then global key, then built-in default, and validation runs on the resolved pair. A per-id idle limit may therefore exceed the built-in open limit when `DB_MAX_OPEN_CONNS` raises it. An idle limit above the effective open limit fails startup with an error naming the database and the key, or the built-in default, that supplied each side.
+
 Supported database drivers:
 
 - MySQL
