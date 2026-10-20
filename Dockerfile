@@ -33,9 +33,9 @@ RUN mkdir -p /app/data
 
 EXPOSE 8088
 
-ENV DB_URL=sqlite://:memory:
+# No DSN or memo is baked into the image: the container refuses to start
+# until the operator supplies a database through DB_URL, DB_{ID}_URL, or --dsn.
 ENV DB_NAME=sql-mcp
-ENV DB_MEMO="Local scratch database for first-run testing"
 ENV LISTEN=:8088
 
 ENTRYPOINT ["/app/sql-mcp"]

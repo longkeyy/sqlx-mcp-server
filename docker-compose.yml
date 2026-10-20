@@ -6,9 +6,15 @@ services:
     ports:
       - "${PORT:-8088}:8088"
     environment:
-      - DB_URL=${DB_URL:-sqlite://:memory:}
-      - DB_NAME=${DB_NAME:-sql-mcp}
-      - DB_MEMO=${DB_MEMO:-Local scratch database for first-run testing}
+      # Persistent SQLite database in the mounted ./data directory.
+      # Set DB_URL= explicitly (empty) to disable this default and rely on DB_{ID}_URL routes.
+      # DATABASE_URL, INSTANCE_NAME and DEFAULT_DATABASE are the previous names and are still forwarded.
+      - DB_URL=${DB_URL-${DATABASE_URL-sqlite:///app/data/sql-mcp.db}}
+      - DB_NAME=${INSTANCE_NAME:-${DB_NAME:-sql-mcp}}
+      - DB_MEMO=${DB_MEMO:-}
+      # Route /mcp and /sse to a named database, e.g. DEFAULT_DB=APP.
+      - DEFAULT_DB=${DEFAULT_DB:-${DEFAULT_DATABASE:-}}
+      - AUTH_TOKEN=${AUTH_TOKEN:-}
       # Optional multi-database routes:
       # - DB_APP_URL=sqlite:///app/data/app.db
       # - DB_APP_NAME=app-db
@@ -21,7 +27,6 @@ services:
       # - DB_DORIS_URL=doris://user:pass@doris-fe:9030/warehouse
       # - DB_OB_URL=oceanbase://user:pass@oceanbase:3306/app
       # - DB_ROACH_URL=cockroach://user:pass@cockroach:26257/app
-      # - DEFAULT_DB=APP
       # Optional pool defaults/overrides:
       # - DB_MAX_OPEN_CONNS=25
       # - DB_MAX_IDLE_CONNS=1

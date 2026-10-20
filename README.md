@@ -40,14 +40,17 @@ go run ./cmd/sql-mcp --dsn sqlite:///tmp/example.db
 
 ## Docker
 
-Run the Docker Hub image:
+The image does not contain a default DSN. Supply one with `DB_URL` or one or more `DB_{ID}_URL` variables; without it the container exits with a "DSN is required" error instead of silently opening a scratch database.
+
+Run the Docker Hub image with a persistent SQLite file:
 
 ```bash
+mkdir -p data
 docker run --rm -p 8088:8088 \
-  -e DB_URL=sqlite://:memory: \
+  -e DB_URL=sqlite:///app/data/sql-mcp.db \
   -e DB_NAME=sql-mcp \
-  -e DB_MEMO="Local scratch database for first-run testing" \
   -e LISTEN=:8088 \
+  -v "$PWD/data:/app/data" \
   longkeyy/sqlx-mcp-server:latest
 ```
 
@@ -66,13 +69,15 @@ By default, `docker-compose.yml` maps:
 http://localhost:8088/mcp
 ```
 
-The compose file uses `DB_URL=sqlite://:memory:` by default and mounts `./data` to `/app/data` for local file-backed SQLite overrides.
+The compose file defaults `DB_URL` to `sqlite:///app/data/sql-mcp.db` and mounts `./data` to `/app/data`, so the database survives container restarts.
 
-For a local SQLite file, use an ignored `docker-compose.override.yml` or export `DB_URL` before starting Compose:
+To use another database, export `DB_URL` before starting Compose or put it in `.env`:
 
 ```bash
-DB_URL=sqlite:///app/data/example.db docker compose up -d
+DB_URL=postgres://user:pass@host:5432/app docker compose up -d
 ```
+
+Set `DB_URL=` explicitly (empty value) to drop the SQLite default and serve only `DB_{ID}_URL` databases. Compose still forwards the legacy `DATABASE_URL`, `INSTANCE_NAME`, and `DEFAULT_DATABASE` variables to their current names.
 
 Publish a multi-architecture image:
 
