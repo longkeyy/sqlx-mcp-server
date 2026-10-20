@@ -79,6 +79,8 @@ DB_URL=postgres://user:pass@host:5432/app docker compose up -d
 
 Set `DB_URL=` explicitly (empty value) to drop the SQLite default and serve only `DB_{ID}_URL` databases. Compose still forwards the legacy `DATABASE_URL`, `INSTANCE_NAME`, and `DEFAULT_DATABASE` variables to their current names.
 
+Compose always forwards `DB_NAME=sql-mcp`. It names the default database when only one `DB_{ID}_URL` database is served, or when `DEFAULT_DB` is set. With several databases and no `DEFAULT_DB`, startup warns that `DB_NAME` was not applied; set `DEFAULT_DB` or `DB_{ID}_NAME` to silence it.
+
 Publish a multi-architecture image:
 
 ```bash
@@ -103,8 +105,8 @@ cp .env.example .env
 | Option | Environment | Default | Description |
 | --- | --- | --- | --- |
 | `--dsn` | `DB_URL` | none | Default database URL-style DSN. |
-| `--name` | `DB_NAME` | generated | MCP server display/logging name. |
-| none | `DB_MEMO` | empty | Short purpose note included in MCP tool descriptions. |
+| `--name` | `DB_NAME` | generated | MCP server display/logging name. Also names the default database when `DB_URL` is not set. |
+| none | `DB_MEMO` | empty | Short purpose note included in MCP tool descriptions. Also describes the default database when `DB_URL` is not set. |
 | `--listen` | `LISTEN` | empty | Network listen address for HTTP/SSE, such as `:8088` or `127.0.0.1:8088`. Empty uses stdio. |
 | `--auth-token` | `AUTH_TOKEN` | empty | Optional token for HTTP/SSE authentication. Empty disables built-in authentication. |
 
@@ -201,6 +203,8 @@ DB_REPORTING_MEMO=Analytics and BI replica
 ```
 
 `DB_MEMO` and `DB_{ID}_MEMO` are included in MCP tool descriptions so agents can distinguish similarly named database instances before they call a tool.
+
+If `DB_URL` is not set, the default database is one of the named databases, so `DB_NAME` and `DB_MEMO` also name and describe it. They apply when `DEFAULT_DB` selects the database, or when it is the only configured database. `DB_{ID}_NAME` and `DB_{ID}_MEMO` always win over them. When several databases are configured without `DEFAULT_DB`, nothing says which one the global values describe, so they are not applied and a warning asks for `DEFAULT_DB` or the per-id keys.
 
 If `DEFAULT_DB` is not set, `DB_URL` is used as the default when present. Otherwise, the first configured database id in sorted order is used; when more than one database is configured this logs a warning naming the chosen id.
 

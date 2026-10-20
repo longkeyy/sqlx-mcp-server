@@ -28,6 +28,8 @@ The process connects to configured databases at startup from URL-style DSNs. Eac
 
 `DB_URL` is the source of truth for the default target database and includes the database name or SQLite file path. `DB_NAME` controls the MCP server display/logging name for that default database. `DB_MEMO` is an optional short purpose note included in MCP tool descriptions.
 
+Without `DB_URL` the default database is one of the named `DB_{ID}_URL` databases, so `DB_NAME` and `DB_MEMO` describe that database too. They apply when `DEFAULT_DB` selects it or when it is the only database; `DB_{ID}_NAME` and `DB_{ID}_MEMO` take precedence. When several databases exist and the default was chosen implicitly, the global values cannot be attributed to any of them, so they are reported as unused and a warning names the key that would fix it.
+
 Neither the binary nor the Docker image has a built-in DSN; both refuse to start without one. Only the Compose file supplies a default: a persistent SQLite file under the mounted `./data` directory.
 
 Multiple databases can be configured with Docker-friendly environment variables:

@@ -91,10 +91,18 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 	}
 
 	// Instance name priority: --name flag > INSTANCE_NAME env (deprecated) > DB_NAME env
+	nameKey := ""
 	if *name != "" {
 		config.Name = *name
+		nameKey = "--name"
 	} else {
 		config.Name = resolver.preferLegacy(envDatabaseName, legacyEnvInstanceName)
+		switch {
+		case resolver.trim(legacyEnvInstanceName) != "":
+			nameKey = legacyEnvInstanceName
+		case resolver.trim(envDatabaseName) != "":
+			nameKey = envDatabaseName
+		}
 	}
 
 	if *listen != "" {
@@ -114,7 +122,13 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 		return nil, err
 	}
 
-	databases, defaultID, err := parseDatabaseConfigs(resolver, config.DSN, config.Name, resolver.trim(envDatabaseMemo), defaultDatabase)
+	databases, defaultID, err := parseDatabaseConfigs(resolver, globalDatabaseSettings{
+		dsn:        config.DSN,
+		name:       config.Name,
+		nameKey:    nameKey,
+		memo:       resolver.trim(envDatabaseMemo),
+		rawDefault: defaultDatabase,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -131,19 +145,33 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 	return config, nil
 }
 
+// globalDatabaseSettings hold the settings that describe the default database
+// when DB_URL is not set. nameKey records which flag or variable supplied the
+// name so a warning can point at the key the operator actually set.
+type globalDatabaseSettings struct {
+	dsn        string
+	name       string
+	nameKey    string
+	memo       string
+	rawDefault string // already-resolved DEFAULT_DB / DEFAULT_DATABASE value
+}
+
 // parseDatabaseConfigs builds the database list from the default DSN plus every
-// DB_{ID}_URL / DATABASE_{ID}_URL key. rawDefault is the already-resolved
-// DEFAULT_DB / DEFAULT_DATABASE value; resolver collects any warnings.
-func parseDatabaseConfigs(resolver *configResolver, defaultDSN, defaultName, defaultMemo, rawDefault string) ([]DatabaseConfig, string, error) {
+// DB_{ID}_URL / DATABASE_{ID}_URL key. resolver collects any warnings.
+func parseDatabaseConfigs(resolver *configResolver, global globalDatabaseSettings) ([]DatabaseConfig, string, error) {
 	databasesByID := map[string]DatabaseConfig{}
+	// Which named databases set a display setting of their own; the global
+	// name and memo only fill the gap.
+	perIDName := map[string]bool{}
+	perIDMemo := map[string]bool{}
 	var ids []string
 	globalPool, err := resolver.parsePoolConfig("", "")
 	if err != nil {
 		return nil, "", err
 	}
 
-	if defaultDSN != "" {
-		name := defaultName
+	if global.dsn != "" {
+		name := global.name
 		if name == "" {
 			name = "sql-mcp-default"
 		}
@@ -160,8 +188,8 @@ func parseDatabaseConfigs(resolver *configResolver, defaultDSN, defaultName, def
 		databasesByID[defaultDatabaseID] = DatabaseConfig{
 			ID:           defaultDatabaseID,
 			Name:         name,
-			Memo:         defaultMemo,
-			DSN:          defaultDSN,
+			Memo:         global.memo,
+			DSN:          global.dsn,
 			MaxOpenConns: pool.maxOpen,
 			MaxIdleConns: pool.maxIdle,
 		}
@@ -172,7 +200,7 @@ func parseDatabaseConfigs(resolver *configResolver, defaultDSN, defaultName, def
 	if err != nil {
 		return nil, "", err
 	}
-	resolver.warnUnusedDatabaseSettings(namedURLs, defaultDSN != "")
+	resolver.warnUnusedDatabaseSettings(namedURLs, global.dsn != "")
 	namedIDs := make([]string, 0, len(namedURLs))
 	for id := range namedURLs {
 		namedIDs = append(namedIDs, id)
@@ -185,6 +213,7 @@ func parseDatabaseConfigs(resolver *configResolver, defaultDSN, defaultName, def
 		if err != nil {
 			return nil, "", err
 		}
+		perIDName[id] = name != ""
 		if name == "" {
 			name = "sql-mcp-" + id
 		}
@@ -192,6 +221,7 @@ func parseDatabaseConfigs(resolver *configResolver, defaultDSN, defaultName, def
 		if err != nil {
 			return nil, "", err
 		}
+		perIDMemo[id] = memo != ""
 		pool, err := resolver.parsePoolConfig(source.id, source.rawID)
 		if err != nil {
 			return nil, "", err
@@ -231,15 +261,16 @@ func parseDatabaseConfigs(resolver *configResolver, defaultDSN, defaultName, def
 			"  clickhouse://user:pass@host:9000/dbname")
 	}
 
+	explicitDefault := global.rawDefault != ""
 	defaultID := ""
-	if rawDefault != "" {
+	if explicitDefault {
 		defaultKey := resolver.activeKey(envDefaultDatabase, legacyEnvDefaultDatabase)
-		normalized, err := normalizeDatabaseID(rawDefault)
+		normalized, err := normalizeDatabaseID(global.rawDefault)
 		if err != nil {
 			return nil, "", fmt.Errorf("invalid %s: %w", defaultKey, err)
 		}
 		if _, exists := databasesByID[normalized]; !exists {
-			return nil, "", fmt.Errorf("%s %q does not match any configured database", defaultKey, rawDefault)
+			return nil, "", fmt.Errorf("%s %q does not match any configured database", defaultKey, global.rawDefault)
 		}
 		defaultID = normalized
 	} else if _, exists := databasesByID[defaultDatabaseID]; exists {
@@ -251,11 +282,44 @@ func parseDatabaseConfigs(resolver *configResolver, defaultDSN, defaultName, def
 		defaultID = ids[0]
 	}
 
+	if global.dsn == "" {
+		applyGlobalDisplay(resolver, databasesByID, perIDName, perIDMemo, explicitDefault, len(ids), defaultID, namedURLs[defaultID].rawID, global)
+	}
+
 	databases := make([]DatabaseConfig, 0, len(ids))
 	for _, id := range ids {
 		databases = append(databases, databasesByID[id])
 	}
 	return databases, defaultID, nil
+}
+
+// applyGlobalDisplay fills the display name and memo of a named default
+// database from the global settings, which describe the default database
+// whenever DB_URL is not set. A per-ID {ID}_NAME or {ID}_MEMO always wins.
+// When the default was picked implicitly among several databases, nothing
+// suggests the global values describe it, so they warn instead of applying.
+func applyGlobalDisplay(resolver *configResolver, databasesByID map[string]DatabaseConfig, perIDName, perIDMemo map[string]bool, explicitDefault bool, databaseCount int, defaultID, defaultRawID string, global globalDatabaseSettings) {
+	applies := explicitDefault || databaseCount == 1
+	database := databasesByID[defaultID]
+
+	if global.nameKey != "" && !perIDName[defaultID] {
+		if applies {
+			database.Name = global.name
+		} else {
+			resolver.warn("%s is not applied to database %q because %s is not set; set %s or DB_%s_NAME",
+				global.nameKey, defaultID, envDefaultDatabase, envDefaultDatabase, defaultRawID)
+		}
+	}
+	if global.memo != "" && !perIDMemo[defaultID] {
+		if applies {
+			database.Memo = global.memo
+		} else {
+			resolver.warn("%s is not applied to database %q because %s is not set; set %s or DB_%s_MEMO",
+				envDatabaseMemo, defaultID, envDefaultDatabase, envDefaultDatabase, defaultRawID)
+		}
+	}
+
+	databasesByID[defaultID] = database
 }
 
 func parsePositiveIntEnv(key, value string) (int, error) {
