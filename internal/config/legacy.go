@@ -390,12 +390,16 @@ func (r *configResolver) warnDuplicateSpelling(firstKey, secondKey string) {
 }
 
 // warnUnusedDatabaseSettings reports per-database keys that configure nothing:
-// settings for an id that has no URL, and DB_DEFAULT_NAME / DB_DEFAULT_MEMO,
+// settings for an id that has no URL, settings for an id whose URL was skipped
+// because it was an http(s) address, and DB_DEFAULT_NAME / DB_DEFAULT_MEMO,
 // which look like settings for the default database but never were. Without
 // the warning such a typo or leftover is silently ignored.
-func (r *configResolver) warnUnusedDatabaseSettings(named map[string]databaseURLSource, hasDefault bool) {
+func (r *configResolver) warnUnusedDatabaseSettings(named map[string]databaseURLSource, ignored map[string]string, hasDefault bool) {
 	for _, setting := range r.settings {
 		if setting.suffix == settingURL || setting.value == "" {
+			continue
+		}
+		if _, skipped := ignored[setting.id]; skipped {
 			continue
 		}
 		if setting.id == defaultDatabaseID {
@@ -427,27 +431,42 @@ type databaseURLSource struct {
 
 // discoverDatabaseURLs collects per-database URLs from current and legacy keys.
 //
+// A value using the http or https scheme is skipped with a warning: services
+// such as APIs and health checks often expose URLs under a DB_-like prefix,
+// and such a key can never be a database. The skipped ids are returned so their
+// other settings do not also warn about a URL that was in fact set. Only http(s)
+// is filtered; any other scheme reaches the DSN parser so a real typo still
+// fails startup.
+//
 // Grouping happens per origin so two spellings of the same id can be compared
 // pairwise, which catches a renamed deployment that still has both. A pair set
 // to different DSNs is an error: silently picking one could point the process at
 // the wrong database. Equal duplicates use the current key and warn. The id is
 // normalized for grouping, so DB_APP_URL and DB_app_URL are the same database:
 // equal values warn, different values are an error.
-func discoverDatabaseURLs(r *configResolver) (map[string]databaseURLSource, error) {
+func discoverDatabaseURLs(r *configResolver) (map[string]databaseURLSource, map[string]string, error) {
 	current := map[string]databaseURLSource{}
 	legacy := map[string]databaseURLSource{}
+	ignored := map[string]string{}
 
 	for _, setting := range r.settings {
 		if setting.suffix != settingURL {
 			continue
 		}
 		if setting.idErr != nil {
-			return nil, fmt.Errorf("invalid database env %s: %w", setting.key, setting.idErr)
+			return nil, nil, fmt.Errorf("invalid database env %s: %w", setting.key, setting.idErr)
 		}
 		if setting.id == defaultDatabaseID {
-			return nil, fmt.Errorf("%s is reserved; use %s for the default database", setting.key, envDatabaseURL)
+			return nil, nil, fmt.Errorf("%s is reserved; use %s for the default database", setting.key, envDatabaseURL)
 		}
 		if setting.value == "" {
+			continue
+		}
+		if isHTTPURL(setting.value) {
+			if _, warned := ignored[setting.id]; !warned {
+				r.warn("%s is not a database URL and is ignored", setting.key)
+				ignored[setting.id] = setting.key
+			}
 			continue
 		}
 
@@ -458,7 +477,7 @@ func discoverDatabaseURLs(r *configResolver) (map[string]databaseURLSource, erro
 		}
 		if existing, exists := group[setting.id]; exists {
 			if existing.dsn != source.dsn {
-				return nil, fmt.Errorf("database id %q is configured more than once by %s and %s", setting.id, existing.key, setting.key)
+				return nil, nil, fmt.Errorf("database id %q is configured more than once by %s and %s", setting.id, existing.key, setting.key)
 			}
 			r.warnDuplicateSpelling(existing.key, setting.key)
 			continue
@@ -482,12 +501,19 @@ func discoverDatabaseURLs(r *configResolver) (map[string]databaseURLSource, erro
 			continue
 		}
 		if currentSource.dsn != legacySource.dsn {
-			return nil, conflictingAliasError(currentSource.key, legacySource.key)
+			return nil, nil, conflictingAliasError(currentSource.key, legacySource.key)
 		}
 		r.warn("%s and %s are both set to the same value; %s is deprecated, use %s instead", legacySource.key, currentSource.key, legacySource.key, currentSource.key)
 	}
 
-	return current, nil
+	return current, ignored, nil
+}
+
+// isHTTPURL reports whether a configured database URL is an http(s) address,
+// matched case-insensitively because URL schemes are.
+func isHTTPURL(value string) bool {
+	lower := strings.ToLower(value)
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }
 
 func conflictingAliasError(currentKey, legacyKey string) error {

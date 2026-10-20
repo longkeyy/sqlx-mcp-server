@@ -80,8 +80,9 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 	resolver := newConfigResolver(env)
 
 	// DSN priority: --dsn flag > DB_URL env > DATABASE_URL env (deprecated)
-	if *dsn != "" {
-		config.DSN = *dsn
+	// Flags are trimmed like the environment values they mirror.
+	if flagDSN := strings.TrimSpace(*dsn); flagDSN != "" {
+		config.DSN = flagDSN
 	} else {
 		envDSN, err := resolver.resolve(envDatabaseURL, legacyEnvDatabaseURL, trimSpace)
 		if err != nil {
@@ -92,8 +93,8 @@ func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
 
 	// Instance name priority: --name flag > INSTANCE_NAME env (deprecated) > DB_NAME env
 	nameKey := ""
-	if *name != "" {
-		config.Name = *name
+	if flagName := strings.TrimSpace(*name); flagName != "" {
+		config.Name = flagName
 		nameKey = "--name"
 	} else {
 		config.Name = resolver.preferLegacy(envDatabaseName, legacyEnvInstanceName)
@@ -194,11 +195,11 @@ func parseDatabaseConfigs(resolver *configResolver, global globalDatabaseSetting
 		ids = append(ids, defaultDatabaseID)
 	}
 
-	namedURLs, err := discoverDatabaseURLs(resolver)
+	namedURLs, ignoredURLs, err := discoverDatabaseURLs(resolver)
 	if err != nil {
 		return nil, "", err
 	}
-	resolver.warnUnusedDatabaseSettings(namedURLs, global.dsn != "")
+	resolver.warnUnusedDatabaseSettings(namedURLs, ignoredURLs, global.dsn != "")
 	namedIDs := make([]string, 0, len(namedURLs))
 	for id := range namedURLs {
 		namedIDs = append(namedIDs, id)

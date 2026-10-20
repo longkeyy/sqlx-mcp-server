@@ -114,6 +114,8 @@ Named database instances use the same pattern: `DB_{ID}_URL`, optional `DB_{ID}_
 
 The `{ID}` token is matched case-insensitively across all `DB_{ID}_*` keys, so `DB_APP_URL` pairs with `DB_app_NAME` and `DB_aPp_MAX_OPEN_CONNS`. Two spellings of one id are the same setting: equal values are accepted with a warning, and different values fail startup.
 
+A `DB_{ID}_URL` (or `DATABASE_{ID}_URL`) set to an `http://` or `https://` address is not a database URL, so it is skipped with a warning instead of failing the process. This keeps API or health-check variables that share the prefix from breaking the databases that are configured. The global `DB_URL` is not filtered: an http(s) value there fails startup like any other unsupported scheme.
+
 ### Legacy environment variable names
 
 Variables from releases before the `DB_*` rename are still accepted, so an existing deployment does not silently lose a database after an upgrade. Every use logs a deprecation warning on stderr.
