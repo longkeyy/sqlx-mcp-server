@@ -1,9 +1,8 @@
 package config
 
 import (
-	"flag"
 	"fmt"
-	"io"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -29,12 +28,24 @@ const (
 
 var databaseURLEnvPattern = regexp.MustCompile(`^DB_(.+)_URL$`)
 
-// AppConfig holds the application configuration
+// AppConfig holds the application configuration resolved from the command
+// line and environment.
 type AppConfig struct {
-	DSN             string
-	Name            string
-	Listen          string
-	AuthToken       string
+	DSN       string
+	Name      string
+	Listen    string // HTTP bind address; always empty in stdio mode
+	AuthToken string
+	// DataDir is the cleaned --data-dir/DATA_DIR value. Parsing never touches
+	// the filesystem; call PrepareDataDir before using it.
+	DataDir string
+	// Mode is ModeStdio or ModeServe.
+	Mode string
+	// LegacyHTTP marks the deprecated no-subcommand HTTP startup.
+	LegacyHTTP bool
+	// ExplicitStdio is true when the stdio subcommand was given.
+	ExplicitStdio bool
+	// Notices are operator-facing startup messages (e.g. deprecations).
+	Notices         []string
 	Databases       []DatabaseConfig
 	DefaultDatabase string
 }
@@ -51,72 +62,19 @@ type DatabaseConfig struct {
 // Parse reads configuration from command-line flags and environment variables.
 // Priority: CLI flags > Environment variables > .env file
 func Parse() (*AppConfig, error) {
-	return parseConfig(os.Args[1:], envMapFromOS())
+	return ParseArgs(os.Args[1:], EnvMapFromOS())
 }
 
-func parseConfig(args []string, env map[string]string) (*AppConfig, error) {
-	flags := flag.NewFlagSet("sql-mcp", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-
-	// Define command line flags
-	dsn := flags.String("dsn", "", "Database connection DSN (e.g., mysql://user:pass@host:3306/db)")
-	name := flags.String("name", "", "Instance name for MCP server display/logging (optional)")
-	listen := flags.String("listen", "", "Network listen address for HTTP/SSE server (e.g., :8088 or 127.0.0.1:8088). Empty uses stdio.")
-	authToken := flags.String("auth-token", "", "HTTP/SSE bearer token. Empty disables built-in authentication.")
-
-	if err := flags.Parse(args); err != nil {
-		return nil, err
-	}
-
-	config := &AppConfig{}
-	lookupEnv := func(key string) (string, bool) {
-		value, ok := env[key]
-		return value, ok
-	}
-
-	// DSN priority: --dsn flag > DB_URL env
-	if *dsn != "" {
-		config.DSN = *dsn
-	} else if envDSN, ok := lookupEnv(envDatabaseURL); ok && envDSN != "" {
-		config.DSN = envDSN
-	}
-
-	// Instance name priority: --name flag > DB_NAME env
-	if *name != "" {
-		config.Name = *name
-	} else if envName, ok := lookupEnv(envDatabaseName); ok && envName != "" {
-		config.Name = envName
-	}
-
-	if *listen != "" {
-		config.Listen = strings.TrimSpace(*listen)
-	} else if envListen, ok := lookupEnv(envListen); ok {
-		config.Listen = strings.TrimSpace(envListen)
-	}
-	if *authToken != "" {
-		config.AuthToken = strings.TrimSpace(*authToken)
-	} else if envAuthToken, ok := lookupEnv(envAuthToken); ok {
-		config.AuthToken = strings.TrimSpace(envAuthToken)
-	}
-
-	databases, defaultDatabase, err := parseDatabaseConfigs(config.DSN, config.Name, strings.TrimSpace(env[envDatabaseMemo]), env)
-	if err != nil {
-		return nil, err
-	}
-	config.Databases = databases
-	config.DefaultDatabase = defaultDatabase
-	if config.DSN == "" && defaultDatabase != "" {
-		config.DSN = databaseByID(databases, defaultDatabase).DSN
-	}
-	if config.Name == "" && defaultDatabase != "" {
-		config.Name = databaseByID(databases, defaultDatabase).Name
-	}
-
-	return config, nil
+// EnvMapFromOS returns the process environment as a map.
+func EnvMapFromOS() map[string]string {
+	return envMapFromOS()
 }
 
-func parseDatabaseConfigs(defaultDSN, defaultName, defaultMemo string, env map[string]string) ([]DatabaseConfig, string, error) {
+func parseDatabaseConfigs(defaultDSN, defaultName, defaultMemo string, env map[string]string, allowEmpty bool) ([]DatabaseConfig, string, error) {
 	databasesByID := map[string]DatabaseConfig{}
+	// sourceByID names where each database came from so configuration errors
+	// can point at the offending variables without echoing DSN credentials.
+	sourceByID := map[string]string{}
 	var ids []string
 	globalPool, err := parsePoolConfig(env, "")
 	if err != nil {
@@ -146,6 +104,7 @@ func parseDatabaseConfigs(defaultDSN, defaultName, defaultMemo string, env map[s
 			MaxOpenConns: pool.maxOpen,
 			MaxIdleConns: pool.maxIdle,
 		}
+		sourceByID[defaultDatabaseID] = "--dsn/" + envDatabaseURL
 		ids = append(ids, defaultDatabaseID)
 	}
 
@@ -187,10 +146,11 @@ func parseDatabaseConfigs(defaultDSN, defaultName, defaultMemo string, env map[s
 		if !pool.hasMaxIdle {
 			pool.maxIdle = globalPool.maxIdle
 		}
-		if existing, exists := databasesByID[id]; exists {
-			return nil, "", fmt.Errorf("database id %q is configured more than once; duplicate DSNs: %s and %s", id, existing.DSN, dsn)
+		if _, exists := databasesByID[id]; exists {
+			return nil, "", fmt.Errorf("database id %q is configured more than once (%s and %s)", id, sourceByID[id], key)
 		}
 		ids = append(ids, id)
+		sourceByID[id] = key
 		databasesByID[id] = DatabaseConfig{
 			ID:           id,
 			Name:         name,
@@ -203,6 +163,12 @@ func parseDatabaseConfigs(defaultDSN, defaultName, defaultMemo string, env map[s
 
 	sort.Strings(ids)
 	if len(ids) == 0 {
+		if allowEmpty {
+			if rawDefault := strings.TrimSpace(env[envDefaultDatabase]); rawDefault != "" {
+				return nil, "", fmt.Errorf("DEFAULT_DB %q does not match any configured database", rawDefault)
+			}
+			return nil, "", nil
+		}
 		return nil, "", fmt.Errorf("DSN is required. Use --dsn, DB_URL, or DB_{ID}_URL environment variables.\n" +
 			"Supported formats:\n" +
 			"  mysql://user:pass@host:3306/dbname\n" +
@@ -323,26 +289,79 @@ func envMapFromOS() map[string]string {
 	return env
 }
 
-// MaskDSN masks sensitive information in DSN for logging
+// MaskDSN hides credentials in a DSN so it can be logged or reported.
+//
+// The userinfo password of a URL-style DSN and password-like query parameters
+// are replaced by "***". The last "@" ends the userinfo so passwords that
+// contain "@" are never partially revealed; when in doubt the function masks
+// more rather than less. DSNs without credentials (e.g. sqlite) are unchanged.
 func MaskDSN(dsn string) string {
 	if dsn == "" {
 		return ""
 	}
 
-	// Try to mask password in URL format
-	for _, prefix := range []string{"mysql://", "mariadb://", "percona://", "tidb://", "doris://", "oceanbase://", "starrocks://", "postgres://", "postgresql://", "cockroach://", "greenplum://", "opengauss://", "mogdb://", "sqlserver://", "clickhouse://"} {
-		if strings.HasPrefix(dsn, prefix) {
-			parts := strings.SplitN(dsn[len(prefix):], "@", 2)
-			if len(parts) == 2 {
-				creds := parts[0]
-				if idx := strings.Index(creds, ":"); idx != -1 {
-					creds = creds[:idx] + ":***"
-				}
-				return prefix + creds + "@" + parts[1]
+	masked := dsn
+	if scheme, rest, ok := strings.Cut(dsn, "://"); ok {
+		if at := strings.LastIndex(rest, "@"); at >= 0 {
+			user, _, hasPassword := strings.Cut(rest[:at], ":")
+			if hasPassword {
+				masked = scheme + "://" + user + ":***@" + rest[at+1:]
 			}
 		}
 	}
-
-	// For SQLite, just return as-is
-	return dsn
+	return secretQueryParamPattern.ReplaceAllString(masked, "${1}***")
 }
+
+// RedactDSN removes a DSN and the credentials it contains from text, such as
+// a driver or URL-parser error, before the text is logged or returned to a
+// client. Raw, quoted (%q) and percent-decoded forms are all replaced.
+func RedactDSN(text, dsn string) string {
+	if text == "" || dsn == "" {
+		return text
+	}
+	text = replaceAllForms(text, dsn, MaskDSN(dsn))
+	for _, secret := range dsnSecrets(dsn) {
+		text = replaceAllForms(text, secret, "***")
+	}
+	return text
+}
+
+func replaceAllForms(text, old, replacement string) string {
+	text = strings.ReplaceAll(text, old, replacement)
+	quoted := strconv.Quote(old)
+	if inner := quoted[1 : len(quoted)-1]; inner != old {
+		text = strings.ReplaceAll(text, inner, replacement)
+	}
+	return text
+}
+
+// dsnSecrets returns the credential values embedded in a DSN: the userinfo
+// password and password-like query parameters, as written and decoded.
+func dsnSecrets(dsn string) []string {
+	var secrets []string
+	add := func(value string) {
+		if value == "" {
+			return
+		}
+		secrets = append(secrets, value)
+		if decoded, err := url.QueryUnescape(value); err == nil && decoded != value && decoded != "" {
+			secrets = append(secrets, decoded)
+		}
+	}
+	if _, rest, ok := strings.Cut(dsn, "://"); ok {
+		if at := strings.LastIndex(rest, "@"); at >= 0 {
+			if _, password, ok := strings.Cut(rest[:at], ":"); ok {
+				add(password)
+			}
+		}
+	}
+	for _, match := range secretQueryParamPattern.FindAllStringSubmatch(dsn, -1) {
+		add(match[2])
+	}
+	return secrets
+}
+
+// secretQueryParamPattern matches credential-bearing DSN parameters such as
+// sqlserver's password=... or clickhouse's password=...; group 1 is the key
+// and separator, group 2 the value.
+var secretQueryParamPattern = regexp.MustCompile(`(?i)([?&;](?:password|passwd|pwd|secret|token|access_token|api_key)=)([^&;#]*)`)
