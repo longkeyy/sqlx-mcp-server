@@ -27,15 +27,24 @@ type queryResponse struct {
 }
 
 type objectInfo struct {
+	Kind        string   `json:"kind,omitempty"`
+	Prefix      string   `json:"prefix,omitempty"`
+	Rule        string   `json:"rule,omitempty"`
+	MemberCount int      `json:"member_count,omitempty"`
+	Examples    []string `json:"examples,omitempty"`
+	GroupID     string   `json:"group_id,omitempty"`
+
 	Type   string `json:"type"`
 	Schema string `json:"schema,omitempty"`
 	Name   string `json:"name"`
 }
 
 type listObjectsResponse struct {
-	Database string       `json:"database"`
-	Dialect  string       `json:"dialect"`
-	Objects  []objectInfo `json:"objects"`
+	Database   string       `json:"database"`
+	Dialect    string       `json:"dialect"`
+	Objects    []objectInfo `json:"objects"`
+	HasMore    bool         `json:"has_more"`
+	NextCursor string       `json:"next_cursor"`
 }
 
 type objectDescriptionResponse struct {
@@ -79,7 +88,7 @@ func executeTool(desc string) mcp.Tool {
 }
 
 func listObjectsTool(desc string) mcp.Tool {
-	return mcp.NewTool("list_objects",
+	return mcp.NewTool("list_objects", mcp.WithNumber("page_size"), mcp.WithString("cursor"), mcp.WithBoolean("group_shards"), mcp.WithString("group_id"),
 		mcp.WithDescription(desc),
 		mcp.WithString("type",
 			mcp.Description("Object type to list: table, view, procedure, function, or all (default: all)"),
@@ -215,10 +224,14 @@ func (a *AppServer) listObjectsToolHandler(ctx context.Context, request mcp.Call
 		return nil, fmt.Errorf("unsupported object type: %s (use table, view, procedure, function, or all)", objectType)
 	}
 
+	objects, more, cursor, err := paginateObjects(objects, request.GetArguments(), a.id, objectType, pattern)
+	if err != nil {
+		return nil, err
+	}
 	response := listObjectsResponse{
 		Database: dbName,
 		Dialect:  a.getSQLDialectName(),
-		Objects:  objects,
+		Objects:  objects, HasMore: more, NextCursor: cursor,
 	}
 	return newJSONToolResult(response)
 }
