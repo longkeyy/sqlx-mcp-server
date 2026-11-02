@@ -51,7 +51,8 @@ var (
 // (including DSNs) for in-process consumers; the HTTP handler never exposes
 // DSNs or credentials.
 type Manager struct {
-	db *sql.DB
+	db       *sql.DB
+	external map[string]config.DatabaseConfig
 
 	// mu guards closed. Operations hold the read lock for their whole
 	// duration so Close waits for in-flight store access.
@@ -188,8 +189,14 @@ func (m *Manager) List(ctx context.Context) ([]config.DatabaseConfig, error) {
 	}
 	out := make([]config.DatabaseConfig, 0, len(records))
 	for _, rec := range records {
-		out = append(out, rec.config())
+		if _, exists := m.external[rec.ID]; !exists {
+			out = append(out, rec.config())
+		}
 	}
+	for _, c := range m.external {
+		out = append(out, c)
+	}
+	sortConfigs(out)
 	return out, nil
 }
 
@@ -201,6 +208,9 @@ func (m *Manager) Resolve(ctx context.Context, id string) (config.DatabaseConfig
 		return config.DatabaseConfig{}, err
 	}
 	defer release()
+	if c, ok := m.external[id]; ok {
+		return c, nil
+	}
 
 	rec, err := getRecord(ctx, m.db, id)
 	if err != nil {
@@ -216,7 +226,12 @@ func (m *Manager) Default(ctx context.Context) (string, error) {
 		return "", err
 	}
 	defer release()
-	return readDefault(ctx, m.db)
+	var id string
+	err = m.db.QueryRowContext(ctx, "SELECT value FROM settings WHERE key='default_instance'").Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
 }
 
 // acquire takes the shared lock for a read operation.

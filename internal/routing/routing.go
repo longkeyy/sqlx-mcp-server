@@ -275,3 +275,14 @@ func (r *Router) Close() error {
 	}
 	return errors.Join(errs...)
 }
+
+// FixedServer exposes the fixed-instance tools for a trusted stdio transport.
+// It pins the instance ID, but resolves its current configuration on each call.
+// Construct this router without an HTTP token authorizer for direct stdio.
+func (r *Router) FixedServer(ctx context.Context, id string) (*mcpserver.MCPServer, error) {
+	endpoint, err := r.fixedEndpoint(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return endpoint.server, nil
+}

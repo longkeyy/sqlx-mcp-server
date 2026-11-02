@@ -31,6 +31,7 @@ var databaseURLEnvPattern = regexp.MustCompile(`^DB_(.+)_URL$`)
 // AppConfig holds the application configuration resolved from the command
 // line and environment.
 type AppConfig struct {
+	Instance  string
 	DSN       string
 	Name      string
 	Listen    string // HTTP bind address; always empty in stdio mode

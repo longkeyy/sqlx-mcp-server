@@ -56,7 +56,13 @@ function App() {
     D(c.default_instance || "");
   }
   useEffect(() => {
+    const back = () => {
+      V(location.pathname === "/tokens" ? "tokens" : "instances");
+      B(null); CL(null); Q(""); F(null); X(null);
+    };
+    window.addEventListener("popstate", back);
     run(load);
+    return () => window.removeEventListener("popstate", back);
   }, []);
   function nav(v) {
     V(v);
@@ -210,7 +216,7 @@ function App() {
                             browse.id +
                             "/objects/describe?" +
                             new URLSearchParams({
-                              object_name: o.name,
+                              object_name: o.schema ? `${o.schema}.${o.name}` : o.name,
                               object_type: o.type || "table",
                             }),
                         ),
@@ -220,7 +226,7 @@ function App() {
                 >
                   {o.kind === "table_group"
                     ? o.prefix + "（疑似分表 " + o.member_count + "）"
-                    : o.name}
+                    : (o.schema ? `${o.schema}.${o.name}` : o.name)}
                 </Button>
               ))}
               {cursor && (
@@ -365,7 +371,7 @@ function App() {
               <label>
                 允许修改数据{" "}
                 <Switch
-                  data-testid="token-allow-execute"
+                  aria-label="允许修改数据" data-testid="token-allow-execute"
                   checked={form.allow_execute}
                   onChange={(v) => F({ ...form, allow_execute: v })}
                 />

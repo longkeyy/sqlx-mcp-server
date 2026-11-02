@@ -29,6 +29,10 @@ const (
 // liveness stay up while the failed instance answers 503. With no database at
 // all the process still serves /healthz; MCP routes answer 503.
 func runServe(ctx context.Context, cfg *config.AppConfig, logger *log.Logger) int {
+	return runManagedServe(ctx, cfg, logger)
+}
+
+func runStaticServe(ctx context.Context, cfg *config.AppConfig, logger *log.Logger) int {
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		logger.Printf("Server error: cannot listen on %s: %v", cfg.Listen, err)

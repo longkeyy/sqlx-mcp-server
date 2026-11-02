@@ -126,6 +126,7 @@ func TestRunHelpExitsZeroWithUsage(t *testing.T) {
 }
 
 func TestRunUsageErrorsExitTwo(t *testing.T) {
+	t.Chdir(t.TempDir()) // Usage failures must not depend on a local persisted management store.
 	cases := []struct {
 		name string
 		args []string
@@ -284,8 +285,8 @@ func TestRunServeServesAndShutsDown(t *testing.T) {
 	if perm := info.Mode().Perm(); perm&0o077 != 0 {
 		t.Fatalf("data dir permissions are %o, want owner-only", perm)
 	}
-	if !strings.Contains(stderr.String(), "persistent instance storage is not part of this release") {
-		t.Fatalf("expected the storage notice, got %q", stderr.String())
+	if _, err := os.Stat(filepath.Join(dataDir, "instances.sqlite")); err != nil {
+		t.Fatalf("persistent store not created: %v", err)
 	}
 
 	cancel()
@@ -309,7 +310,7 @@ func TestRunServeListenConflictExitsOne(t *testing.T) {
 	}
 	defer blocker.Close()
 
-	result := runOnce(t, []string{"serve", "--listen", blocker.Addr().String(), "--dsn", sqliteDSN(t, "conflict")}, nil, nil)
+	result := runOnce(t, []string{"serve", "--listen", blocker.Addr().String(), "--dsn", sqliteDSN(t, "conflict"), "--data-dir", t.TempDir()}, nil, nil)
 	if result.code != exitRuntime {
 		t.Fatalf("exit code=%d, want %d (stderr=%s)", result.code, exitRuntime, result.stderr)
 	}
@@ -324,9 +325,10 @@ func TestRunLegacyHTTPServesWithNotice(t *testing.T) {
 
 	var stdout, stderr lockedBuffer
 	dsn := sqliteDSN(t, "legacy-marker")
+	dataDir := t.TempDir()
 	exit := make(chan int, 1)
 	go func() {
-		exit <- run(ctx, []string{"--listen", "127.0.0.1:0", "--dsn", dsn}, nil,
+		exit <- run(ctx, []string{"--listen", "127.0.0.1:0", "--dsn", dsn, "--data-dir", dataDir}, nil,
 			nil, &syncWriter{w: &stdout}, &syncWriter{w: &stderr})
 	}()
 

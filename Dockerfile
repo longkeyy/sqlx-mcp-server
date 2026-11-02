@@ -1,5 +1,12 @@
 # syntax=docker/dockerfile:1.7
 
+FROM --platform=$BUILDPLATFORM node:22.22.0-bookworm AS frontend
+WORKDIR /build/web
+COPY web/package*.json ./
+RUN npm ci --no-audit --no-fund
+COPY web ./
+RUN npm run build
+
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 WORKDIR /build
@@ -13,6 +20,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 COPY cmd ./cmd
 COPY internal ./internal
+COPY --from=frontend /build/internal/webui /build/internal/webui
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -39,3 +47,4 @@ ENV DB_MEMO="Local scratch database for first-run testing"
 ENV LISTEN=:8088
 
 ENTRYPOINT ["/app/sql-mcp"]
+CMD ["serve", "--data-dir", "/app/data"]

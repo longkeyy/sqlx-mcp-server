@@ -50,8 +50,10 @@ var ErrHelp = errors.New("help requested")
 // startup, so configuration can be inspected by callers and tests safely.
 func ParseArgs(args []string, env map[string]string) (*AppConfig, error) {
 	var values flagValues
+	var instance string
 	flags := flag.NewFlagSet("sql-mcp", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
+	flags.StringVar(&instance, "instance", "", "Explicit database instance for stdio")
 	flags.StringVar(&values.dsn, "dsn", "", "Database DSN (e.g., mysql://user:pass@host:3306/db)")
 	flags.StringVar(&values.name, "name", "", "Instance name for MCP server display/logging (optional)")
 	flags.StringVar(&values.listen, "listen", "", "HTTP listen address (e.g., :8088 or 127.0.0.1:8088)")
@@ -73,6 +75,7 @@ func ParseArgs(args []string, env map[string]string) (*AppConfig, error) {
 	listenEnv := strings.TrimSpace(env[envListen])
 	appConfig := &AppConfig{
 		Mode:          mode,
+		Instance:      strings.TrimSpace(instance),
 		ExplicitStdio: explicitStdio,
 		DSN:           firstNonEmpty(values.dsn, env[envDatabaseURL]),
 		Name:          firstNonEmpty(values.name, env[envDatabaseName]),
@@ -175,7 +178,7 @@ func parseCommand(flags *flag.FlagSet, args []string) (mode string, explicitStdi
 // to stay healthy without any instance; stdio and the legacy HTTP startup keep
 // requiring a DSN.
 func servesWithoutDatabases(cfg *AppConfig) bool {
-	return cfg.Mode == ModeServe && !cfg.LegacyHTTP
+	return (cfg.Mode == ModeServe && !cfg.LegacyHTTP) || cfg.DataDir != ""
 }
 
 // PrepareDataDir creates the configured data directory with owner-only
