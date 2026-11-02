@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"mime"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/longkeyy/sqlx-mcp-server/internal/dsn"
@@ -105,6 +107,9 @@ func (m *Manager) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if m.externalRequest(w, r, route, id) {
+		return
+	}
 	switch route {
 	case "instances":
 		switch r.Method {
@@ -212,10 +217,14 @@ func originAllowed(r *http.Request) bool {
 		return false
 	}
 	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" {
+	if err != nil || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return false
 	}
-	return strings.EqualFold(u.Host, r.Host)
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return strings.EqualFold(u.Scheme, scheme) && strings.EqualFold(u.Host, r.Host)
 }
 
 func (m *Manager) serveList(w http.ResponseWriter, r *http.Request) {
@@ -226,8 +235,14 @@ func (m *Manager) serveList(w http.ResponseWriter, r *http.Request) {
 	}
 	views := make([]instanceView, 0, len(records))
 	for _, rec := range records {
-		views = append(views, newInstanceView(rec))
+		if _, exists := m.external[rec.ID]; !exists {
+			views = append(views, newInstanceView(rec))
+		}
 	}
+	for _, c := range m.external {
+		views = append(views, m.externalView(c))
+	}
+	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
 	writeJSON(w, http.StatusOK, listResponse{Instances: views})
 }
 
@@ -307,7 +322,11 @@ func (m *Manager) serveSetDefault(w http.ResponseWriter, r *http.Request) {
 		m.writeError(w, r, err)
 		return
 	}
-	if err := m.setDefault(r.Context(), id); err != nil {
+	setDefault := m.setDefault
+	if _, ok := m.external[id]; ok {
+		setDefault = m.externalDefault
+	}
+	if err := setDefault(r.Context(), id); err != nil {
 		m.writeError(w, r, err)
 		return
 	}
@@ -397,7 +416,8 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) error {
 		}
 		return invalidf("invalid JSON body")
 	}
-	if dec.More() {
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
 		return invalidf("invalid JSON body")
 	}
 	return nil

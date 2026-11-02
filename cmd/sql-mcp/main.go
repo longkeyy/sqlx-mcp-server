@@ -57,6 +57,16 @@ func main() {
 func run(ctx context.Context, args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
 	logger := log.New(stderr, "", log.LstdFlags)
 
+	if env["DATA_DIR"] == "" {
+		if info, err := os.Stat("data/instances.sqlite"); err == nil && info.Mode().IsRegular() {
+			copied := make(map[string]string, len(env)+1)
+			for k, v := range env {
+				copied[k] = v
+			}
+			copied["DATA_DIR"] = "data"
+			env = copied
+		}
+	}
 	cfg, err := config.ParseArgs(args, env)
 	if errors.Is(err, config.ErrHelp) {
 		config.Usage(stdout)
@@ -71,6 +81,9 @@ func run(ctx context.Context, args []string, env map[string]string, stdin io.Rea
 		logger.Printf("Notice: %s", notice)
 	}
 
+	if cfg.DataDir == "" && cfg.Mode == config.ModeServe {
+		cfg.DataDir = "data"
+	}
 	if cfg.DataDir != "" {
 		dataDir, err := config.PrepareDataDir(cfg.DataDir)
 		if err != nil {
@@ -78,7 +91,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdin io.Rea
 			return exitUsage
 		}
 		cfg.DataDir = dataDir
-		logger.Printf("Using data directory %s (persistent instance storage is not part of this release)", cfg.DataDir)
+		logger.Printf("Using data directory %s", cfg.DataDir)
 	}
 
 	if cfg.Mode == config.ModeStdio {
