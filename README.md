@@ -7,6 +7,9 @@ The SQLite driver is `modernc.org/sqlite`, so SQLite builds can run with `CGO_EN
 ## Features
 
 - Query SQL databases through MCP tools.
+- Embedded React + Ant Design administration UI: instance CRUD, connection tests, default selection, metadata browsing, and token management. No login or SQL editor.
+- Persistent instance/token stores, per-call token revocation checks, and optional execute permission.
+- Paginated object discovery with rule-based grouping of suspected shard tables.
 - Supports MySQL, MariaDB, Percona, TiDB, OceanBase, Apache Doris, StarRocks, PostgreSQL, CockroachDB, Greenplum, openGauss, MogDB, SQLite, SQL Server, and ClickHouse DSNs.
 - Provides `query`, `execute`, `list_objects`, and `describe_object` tools.
 - Supports Streamable HTTP at `/mcp`.
@@ -18,29 +21,55 @@ The SQLite driver is `modernc.org/sqlite`, so SQLite builds can run with `CGO_EN
 
 ## Quick Start
 
-Run with SQLite:
+Build from source (Go 1.26+ and Node 22.22+):
 
 ```bash
-DB_URL=sqlite:///tmp/example.db \
-LISTEN=:8088 \
-go run ./cmd/sql-mcp
+make build
+./dist/sql-mcp serve --listen 127.0.0.1:8088 --data-dir ./data
 ```
 
-The Streamable HTTP MCP endpoint is:
+Open **http://127.0.0.1:8088/** to add database instances. No database needs to be
+configured before starting. UI assets are embedded in the binary: Node, a static
+asset directory, and internet access are not needed at runtime.
 
-```text
-http://localhost:8088/mcp
-```
+- `/mcp`: multi-instance Streamable HTTP gateway.
+- `/db/INSTANCE_ID/mcp`: fixed-instance endpoint.
+- `/healthz`: liveness, including when no database is available.
 
-Run with stdio:
+Run stdio with an explicit DSN:
 
 ```bash
-go run ./cmd/sql-mcp --dsn sqlite:///tmp/example.db
+./dist/sql-mcp stdio --dsn sqlite:///tmp/example.db
 ```
+
+Or use a persisted instance without running the HTTP service:
+
+```bash
+./dist/sql-mcp stdio --data-dir ./data --instance reporting
+```
+
+Omit `--instance` to use the saved default when no static DSN is configured.
+The default `data/instances.sqlite`, when present, is discovered automatically.
+No subcommand defaults to stdio. Explicit `stdio` ignores `LISTEN`; legacy
+`--listen`/`LISTEN` startup remains supported with a migration notice.
+
+`make release` builds embedded-UI binaries for the configured target platforms.
+See [management and build details](docs/management-ui.md).
 
 ## Docker
 
-Run the Docker Hub image:
+Build and run the current source (pushing Git does not publish a Docker Hub image):
+
+```bash
+docker build -t sqlx-mcp:local .
+mkdir -p data
+docker run --rm -p 127.0.0.1:8088:8088 \
+  -v "$PWD/data:/app/data" \
+  -e DB_URL= \
+  sqlx-mcp:local serve --listen :8088 --data-dir /app/data
+```
+
+Alternatively, run the published Docker Hub image (features depend on its release):
 
 ```bash
 docker run --rm -p 8088:8088 \
@@ -100,8 +129,10 @@ cp .env.example .env
 | `--dsn` | `DB_URL` | none | Default database URL-style DSN. |
 | `--name` | `DB_NAME` | generated | MCP server display/logging name. |
 | none | `DB_MEMO` | empty | Short purpose note included in MCP tool descriptions. |
-| `--listen` | `LISTEN` | empty | Network listen address for HTTP/SSE, such as `:8088` or `127.0.0.1:8088`. Empty uses stdio. |
-| `--auth-token` | `AUTH_TOKEN` | empty | Optional token for HTTP/SSE authentication. Empty disables built-in authentication. |
+| `--listen` | `LISTEN` | `127.0.0.1:8088` in `serve` | Network address; explicit `stdio` never opens a listener. |
+| `--auth-token` | `AUTH_TOKEN` | empty | Legacy execute-enabled MCP token; persisted token policy still applies when empty. |
+| `--data-dir` | `DATA_DIR` | `data` in `serve` | Persistent management stores. |
+| `--instance` | none | saved/static default | Explicit stdio instance ID. |
 
 Named database instances use the same pattern: `DB_{ID}_URL`, optional `DB_{ID}_NAME`, and optional `DB_{ID}_MEMO`.
 
@@ -150,17 +181,24 @@ The `{ID}` part becomes the lowercase route id. For example, `DB_REPORTING_URL` 
 Routes:
 
 ```text
-/mcp                    -> default database, Streamable HTTP
+/mcp                    -> multi-instance gateway, Streamable HTTP
 /db/app/mcp             -> app database, Streamable HTTP
 /db/reporting/mcp       -> reporting database, Streamable HTTP
 
-/sse                    -> default database, SSE stream
-/message                -> default database, SSE message endpoint
+/sse                    -> multi-instance gateway, SSE stream
+/message                -> multi-instance gateway, SSE message endpoint
 /db/app/sse             -> app database, SSE stream
 /db/app/message         -> app database, SSE message endpoint
 ```
 
-Set `LISTEN` to expose Streamable HTTP and SSE routes on the same port. Leave it empty to use stdio.
+Use `serve` to expose UI, Streamable HTTP and SSE on the same port. The gateway
+provides `list_instances`; `query`, `execute`, `list_objects`, and
+`describe_object` require an `instance` argument. Fixed `/db/{id}/...` endpoints
+omit that argument and reject it if supplied. Changing the default never
+retargets gateway calls.
+
+UI-created instances persist in the data directory. CLI/environment instances
+are shown as external and cannot be edited through the UI.
 
 Optional display names and memos:
 
@@ -171,7 +209,7 @@ DB_REPORTING_NAME=reporting-db
 DB_REPORTING_MEMO=Analytics and BI replica
 ```
 
-`DB_MEMO` and `DB_{ID}_MEMO` are included in MCP tool descriptions so agents can distinguish similarly named database instances before they call a tool.
+`DB_MEMO` and `DB_{ID}_MEMO` appear in gateway `list_instances` results so agents can distinguish instances. Static stdio also includes memos in its database-specific tool descriptions.
 
 If `DEFAULT_DB` is not set, `DB_URL` is used as the default when present. Otherwise, the first configured database id in sorted order is used.
 
@@ -197,7 +235,17 @@ The default idle connection count is intentionally low because MCP SQL access is
 
 ## Authentication
 
-Set `AUTH_TOKEN` to protect HTTP/SSE endpoints:
+Create tokens in the UI at `/tokens`. Tokens are displayed only at creation and
+stored as digests. `allow_execute=false` blocks the `execute` tool; database
+account permissions remain the SQL privilege boundary. Credentials and permissions
+are checked on every tool call, including existing SSE sessions after revocation.
+
+A fresh store with no tokens or `AUTH_TOKEN` allows anonymous MCP access. Once
+tokens have been created, revoking the last token does not reopen anonymous access.
+MCP tokens do **not** protect the admin UI/API; bind to loopback or a trusted network.
+Direct stdio does not require an HTTP token.
+
+Alternatively, set the legacy execute-enabled `AUTH_TOKEN`:
 
 ```env
 AUTH_TOKEN=change-me
@@ -262,6 +310,10 @@ http://127.0.0.1:8088/sse?token=change-me
 
 ## MCP Tools
 
+Gateway calls require `instance` for all database tools below. Fixed-instance
+endpoints omit it. `list_instances()` is available only on the gateway and returns
+instance IDs and descriptive metadata without credentials.
+
 ### `query`
 
 Executes read-oriented SQL and returns compact JSON with columns and row arrays.
@@ -295,6 +347,18 @@ Arguments:
 | --- | --- | --- |
 | `type` | no | `table`, `view`, `procedure`, `function`, or `all`. |
 | `pattern` | no | Case-insensitive regex filter. |
+| `page_size` | no | Integer 1–1000; default 1000. |
+| `cursor` | no | Opaque continuation cursor from the preceding page. |
+| `group_shards` | no | Group suspected shard tables; default true. |
+| `group_id` | no | Expand a returned group into real members. |
+
+Results include `objects`, `has_more`, and `next_cursor` (empty at the end).
+Filtering precedes grouping and pagination. Groups require at least four tables
+sharing a schema/prefix and suffix width: decimal `_0`…`_99`, or two-character
+hex suffixes with at least one a–f member. Group entries include `kind: table_group`,
+`prefix`, `rule`, `member_count`, limited `examples`, and `group_id`. These are naming
+heuristics, not proof of native partitions or identical schemas. Expand a group
+before describing a real table. Changed filters or metadata invalidate cursors.
 
 ### `describe_object`
 
@@ -311,7 +375,7 @@ Arguments:
 
 The `query` tool includes a read-oriented SQL guardrail, but it is not a complete security boundary. Use database users with the least privileges required for your deployment.
 
-Remote HTTP deployments should be protected by `AUTH_TOKEN`, a trusted reverse proxy, VPN, or network policy.
+Remote administration requires trusted-network isolation, a VPN, or reverse-proxy access control. `AUTH_TOKEN` and UI-created tokens protect MCP endpoints only, not the management UI/API.
 
 ## Design
 
@@ -324,9 +388,9 @@ The server creates one runtime instance per configured database. Each instance o
 - A parsed URL-style DSN.
 - A dedicated `database/sql` connection pool.
 - A database dialect.
-- An MCP server with tool descriptions generated from that database, including the configured memo when present.
+- A database-specific MCP server. HTTP gateways expose generic tool schemas and return names/memos through `list_instances`.
 
-For multi-database deployments, the URL path selects the database instance. Tool calls do not include a database selector argument, which keeps each MCP session scoped to one database and reduces the chance of an LLM accidentally querying the wrong database.
+Multi-instance gateways select the target explicitly with the `instance` argument. Fixed-instance paths bind the target and reject overrides. Managed configurations are resolved at operation boundaries; existing calls finish on their original pool.
 
 ### Tool Contract
 
@@ -364,6 +428,9 @@ Object listings use object records:
 
 ```json
 {
+  "instance": "reporting",
+  "has_more": false,
+  "next_cursor": "",
   "database": "main",
   "dialect": "SQLite",
   "objects": [
@@ -434,7 +501,11 @@ The project uses a conventional Go binary plus internal package layout:
 - `internal/dsn`: URL-style DSN parsing and driver mapping.
 - `internal/server`: per-database MCP server setup, tool handlers, metadata queries, result encoding, and read-query validation.
 
-If the implementation grows, these boundaries should move into small internal packages or explicit types rather than broad package-level state.
+- `internal/instances`: persistent management store and instance administration.
+- `internal/routing`: dynamic multi-instance and fixed-instance MCP gateways.
+- `internal/tokens`: token digests, HTTP authentication, and per-call authorization.
+- `internal/webui`: embedded static assets and SPA handler.
+- `web`: React + Ant Design source and frontend build.
 
 ## Development
 
@@ -450,9 +521,10 @@ Verify CGO-free SQLite support:
 CGO_ENABLED=0 go test ./...
 ```
 
-Build for Linux ARM64:
+Build for Linux ARM64 (regenerate UI assets first):
 
 ```bash
+make frontend
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o dist/sql-mcp-linux-arm64 ./cmd/sql-mcp
 ```
 
