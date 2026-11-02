@@ -1,67 +1,98 @@
+// Command sql-mcp exposes SQL databases over the Model Context Protocol.
+//
+// Modes:
+//   - stdio (default, or `sql-mcp stdio`): JSON-RPC on stdin/stdout, logs on stderr.
+//   - serve (`sql-mcp serve`): Streamable HTTP and legacy SSE transports.
+//
+// The deprecated no-subcommand `--listen`/LISTEN startup is kept as an alias of
+// serve with a migration notice. Static databases come from --dsn/DB_URL and
+// DB_{ID}_URL; --data-dir is accepted for the instance store assembled later.
 package main
 
 import (
+	"context"
+	"errors"
+	"io"
 	"log"
-	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	_ "github.com/ClickHouse/clickhouse-go/v2"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
-	mcpserver "github.com/mark3labs/mcp-go/server"
 	_ "github.com/microsoft/go-mssqldb"
 	_ "modernc.org/sqlite"
 
 	"github.com/longkeyy/sqlx-mcp-server/internal/config"
-	sqlmcp "github.com/longkeyy/sqlx-mcp-server/internal/server"
 )
 
-func init() {
-	if _, err := os.Stat(".env"); err == nil {
-		if err := godotenv.Load(); err != nil {
-			log.Printf("Warning: Error loading .env file: %v\n", err)
-		}
-	}
-}
+// Process exit codes are part of the command contract: 2 means the operator
+// asked for something invalid, 1 means a valid configuration failed at runtime.
+const (
+	exitOK      = 0
+	exitRuntime = 1
+	exitUsage   = 2
+)
 
 func main() {
-	cfg, err := config.Parse()
-	if err != nil {
-		log.Fatal(err)
+	// The .env file is a developer convenience; real deployments pass flags or
+	// environment variables. Keeping it here (not in init) leaves run testable.
+	if _, err := os.Stat(".env"); err == nil {
+		if err := godotenv.Load(); err != nil {
+			log.Printf("Warning: could not load .env file: %v", err)
+		}
 	}
 
-	apps, err := sqlmcp.BuildAppServers(cfg.Databases)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer sqlmcp.CloseAppServers(apps)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	if cfg.Listen == "" {
-		log.Printf("Starting %d database instance(s) in stdio mode; default=%s", len(apps), cfg.DefaultDatabase)
-		app, err := sqlmcp.GetDefaultApp(apps, cfg.DefaultDatabase)
+	os.Exit(run(ctx, os.Args[1:], config.EnvMapFromOS(), os.Stdin, os.Stdout, os.Stderr))
+}
+
+// run executes one complete lifecycle and returns the process exit code.
+// All diagnostic output goes to stderr; stdout is reserved for MCP JSON-RPC in
+// stdio mode (usage text is the only exception).
+func run(ctx context.Context, args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
+	logger := log.New(stderr, "", log.LstdFlags)
+
+	cfg, err := config.ParseArgs(args, env)
+	if errors.Is(err, config.ErrHelp) {
+		config.Usage(stdout)
+		return exitOK
+	}
+	if err != nil {
+		logger.Printf("Configuration error: %v", err)
+		return exitUsage
+	}
+
+	for _, notice := range cfg.Notices {
+		logger.Printf("Notice: %s", notice)
+	}
+
+	if cfg.DataDir != "" {
+		dataDir, err := config.PrepareDataDir(cfg.DataDir)
 		if err != nil {
-			log.Fatal(err)
+			logger.Printf("Configuration error: %v", err)
+			return exitUsage
 		}
-		if err := mcpserver.ServeStdio(app.MCPServer()); err != nil {
-			log.Printf("Stdio server error: %v\n", err)
-		}
-		return
+		cfg.DataDir = dataDir
+		logger.Printf("Using data directory %s (persistent instance storage is not part of this release)", cfg.DataDir)
 	}
 
-	mux := http.NewServeMux()
-	if err := sqlmcp.MountHTTPServers(mux, apps, cfg.DefaultDatabase); err != nil {
-		log.Fatal(err)
+	if cfg.Mode == config.ModeStdio {
+		return runStdio(ctx, cfg, stdin, stdout, logger)
 	}
-	if err := sqlmcp.MountSSEServers(mux, apps, cfg.DefaultDatabase); err != nil {
-		log.Fatal(err)
+	return runServe(ctx, cfg, logger)
+}
+
+// defaultDatabaseConfig returns the static database selected as default.
+func defaultDatabaseConfig(cfg *config.AppConfig) (config.DatabaseConfig, bool) {
+	for _, database := range cfg.Databases {
+		if database.ID == cfg.DefaultDatabase {
+			return database, true
+		}
 	}
-	log.Printf("Starting %d database instance(s) on %s; default=%s", len(apps), cfg.Listen, cfg.DefaultDatabase)
-	if cfg.AuthToken != "" {
-		log.Printf("HTTP/SSE authentication enabled")
-	}
-	log.Printf("MCP endpoints listening on %s/mcp and %s/sse; database endpoints on %s/db/{id}/mcp and %s/db/{id}/sse", cfg.Listen, cfg.Listen, cfg.Listen, cfg.Listen)
-	if err := http.ListenAndServe(cfg.Listen, sqlmcp.AuthMiddleware(cfg.AuthToken)(mux)); err != nil {
-		log.Fatalf("Server error: %v", err)
-	}
+	return config.DatabaseConfig{}, false
 }
